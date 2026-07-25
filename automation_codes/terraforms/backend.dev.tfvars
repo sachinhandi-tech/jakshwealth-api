@@ -1,4 +1,4 @@
-bucket = "jakshwealth-artifacts-dev"
+bucket = "jakshwealth-artifacts-dev-aps2"
 key    = "dev/jw-api/terraform/terraform.tfstate"
 region = "ap-south-2"
 profile = "jakshwealth"

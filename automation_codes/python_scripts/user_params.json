@@ -2,5 +2,6 @@
   "s3_bucket_details": {
     "lambda_bucket": "jw-api"
   },
-  "enable_lambda_vpc": false
+  "enable_lambda_vpc": false,
+  "default_region_bucket_suffix": "aps2"
 }

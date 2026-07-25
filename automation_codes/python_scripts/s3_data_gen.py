@@ -8,11 +8,22 @@ def s3_data_tf(s3bucket, name, resource_type, s3_key):
            "}\n"
 
 
+def region_suffix_for(env, user_params):
+    suffix_map = user_params.get('region_bucket_suffix', {})
+    if env in suffix_map:
+        return suffix_map[env]
+    return user_params.get('default_region_bucket_suffix', 'aps2')
+
+
 def s3_data_gen(env, code_dir, terraform_dir, lambda_s3_bucket):
+    import json
+    with open('user_params.json') as f:
+        user_params = json.load(f)
+    suffix = region_suffix_for(env, user_params)
+    s3_bucket = f'jakshwealth-artifacts-{env}-{suffix}'
+
     directories = resource_gen(code_dir)
     internal_lambdas = directories['internal_lambda']
-
-    s3_bucket = 'jakshwealth-artifacts-' + env
     s3_data_list = list()
 
     for internal_lambda in internal_lambdas:

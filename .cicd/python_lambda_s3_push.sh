@@ -9,7 +9,14 @@ aws sts get-caller-identity
 
 function_list="$WORKSPACE/automation_codes/text_files/py_function_list.txt"
 
-s3_bucket="jakshwealth-artifacts-$1"
+ENV="${1:-dev}"
+AWS_REGION="${AWS_REGION:-ap-south-2}"
+case "${AWS_REGION}" in
+  ap-south-2) REGION_SUFFIX="aps2" ;;
+  us-east-1)  REGION_SUFFIX="use1" ;;
+  *)          REGION_SUFFIX="${AWS_REGION//-/}" ;;
+esac
+s3_bucket="jakshwealth-artifacts-${ENV}-${REGION_SUFFIX}"
 s3_key="jw-api/"
 
 lambda_source_hash() {
