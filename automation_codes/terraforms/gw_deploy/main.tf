@@ -2,6 +2,22 @@ data "aws_api_gateway_rest_api" "rest_api" {
   name = var.gateway_name
 }
 
+# Adopt resources renamed from legacy CCD-prefixed Terraform addresses.
+moved {
+  from = aws_api_gateway_stage.ccdapi_stage
+  to   = aws_api_gateway_stage.jw_api_stage
+}
+
+moved {
+  from = aws_api_gateway_method_settings.ccdapi_method_settings
+  to   = aws_api_gateway_method_settings.jw_api_method_settings
+}
+
+moved {
+  from = aws_api_gateway_base_path_mapping.ccd_base_path
+  to   = aws_api_gateway_base_path_mapping.jw_api_base_path
+}
+
 resource "aws_api_gateway_deployment" "endpoint_deployment" {
   description = "deployment post endpoint creation: ${md5(file("../api_integration.tf"))}"
   rest_api_id = data.aws_api_gateway_rest_api.rest_api.id

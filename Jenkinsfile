@@ -131,6 +131,19 @@ pipeline {
                               echo "terraform ${TF_ACTION} — ${stack_name}"
                               cd "${tf_dir}"
                               terraform init -input=false -reconfigure -backend-config="backend.dev.tfvars"
+
+                              if [ "${stack_name}" = "gw_deploy" ] && [ "${TF_ACTION}" != "destroy" ]; then
+                                if ! terraform state show 'aws_api_gateway_stage.jw_api_stage' >/dev/null 2>&1; then
+                                  if aws apigateway get-stage \
+                                    --rest-api-id "${API_ID}" \
+                                    --stage-name "${DEPLOY_ENV}" >/dev/null 2>&1; then
+                                    echo "Importing existing API Gateway stage ${API_ID}/${DEPLOY_ENV}"
+                                    terraform import -input=false -var-file="vars.dev.tfvars" \
+                                      aws_api_gateway_stage.jw_api_stage "${API_ID}/${DEPLOY_ENV}"
+                                  fi
+                                fi
+                              fi
+
                               if [ "${TF_ACTION}" = "destroy" ]; then
                                 terraform plan -destroy -lock-timeout=10m -var-file="vars.dev.tfvars" -out=tfplan.out
                               else
