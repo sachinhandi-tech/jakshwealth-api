@@ -1,0 +1,22 @@
+{
+  "lambda_name": "jw_secure_data",
+  "full_path": "/jw-api/secure-data",
+  "allow_subpath": true,
+  "methods": ["GET", "POST", "OPTIONS"],
+  "disable_auth": ["OPTIONS"],
+  "internet": "true",
+  "description": "Protected business API — all product features under /jw-api/secure-data/*",
+  "runtime": "python3.12",
+  "handler": "handler.handler",
+  "memory_size": "512",
+  "timeout": "60",
+  "ephemeral_memory": "512",
+  "layers": [],
+  "permissions": {
+    "USER": ["GET", "POST", "OPTIONS"]
+  },
+  "environmental_variables": {
+    "ENVIRONMENT": "dev",
+    "LOG_LEVEL": "INFO"
+  }
+}

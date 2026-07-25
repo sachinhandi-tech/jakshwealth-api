@@ -1,0 +1,66 @@
+[
+  {
+    "name": "claims_by_region_bar",
+    "description": "Aggregate paid claims by member region.",
+    "dsl": {
+      "from": { "table": "claims", "alias": "c" },
+      "joins": [
+        {
+          "type": "left",
+          "table": "members",
+          "alias": "m",
+          "on": { "left": "c.member_id", "op": "eq", "right": "m.member_id" }
+        }
+      ],
+      "select": [
+        { "field": "m.region", "as": "region" },
+        { "agg": "count", "field": "c.claim_id", "as": "claim_count" },
+        { "agg": "sum", "field": "c.paid_amount", "as": "total_paid" }
+      ],
+      "where": {
+        "field": "c.claim_status",
+        "op": "eq",
+        "value": "PAID"
+      },
+      "group_by": ["m.region"],
+      "order_by": [{ "field": "claim_count", "kind": "alias", "dir": "desc" }],
+      "limit": 100
+    }
+  },
+  {
+    "name": "recent_claims_table",
+    "description": "Tabular list of recent paid claims with member and provider context.",
+    "dsl": {
+      "from": { "table": "claims", "alias": "c" },
+      "joins": [
+        {
+          "type": "left",
+          "table": "members",
+          "alias": "m",
+          "on": { "left": "c.member_id", "op": "eq", "right": "m.member_id" }
+        },
+        {
+          "type": "left",
+          "table": "providers",
+          "alias": "p",
+          "on": { "left": "c.provider_id", "op": "eq", "right": "p.provider_id" }
+        }
+      ],
+      "select": [
+        { "field": "c.claim_id", "as": "claim_id" },
+        { "field": "m.member_name", "as": "member_name" },
+        { "field": "p.provider_name", "as": "provider_name" },
+        { "field": "c.claim_status", "as": "claim_status" },
+        { "field": "c.service_date", "as": "service_date" },
+        { "field": "c.paid_amount", "as": "paid_amount" }
+      ],
+      "where": {
+        "field": "c.claim_status",
+        "op": "eq",
+        "value": "PAID"
+      },
+      "order_by": [{ "field": "c.service_date", "dir": "desc" }],
+      "limit": 50
+    }
+  }
+]

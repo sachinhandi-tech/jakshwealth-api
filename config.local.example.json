@@ -1,0 +1,26 @@
+{
+  "_comment": "Copy to config.local.json (gitignored). When ENVIRONMENT=local, dev/jakshwealth/config is loaded from AWS first; only non-empty, non-placeholder values here replace the dev secret. Omit keys you want to inherit from dev. Optional: JW_CORS_ALLOWED_ORIGINS=comma-separated extra UI origins (e.g. CloudFront URL).",
+
+  "FRONTEND_URL": "http://localhost:4200",
+
+  "JW_BYPASS_OKTA_AUTH": "true",
+  "JW_BYPASS_OKTA_LAN_ID": "DEVUSER01",
+  "USER_GG": "JW_USERS",
+  "ADMIN_GG": "JW_ADMINS",
+
+  "OKTA_CLIENT_SECRET": "",
+
+  "DATABRICKS_SERVER_HOSTNAME": "",
+  "DATABRICKS_WAREHOUSE_ID": "",
+  "DATABRICKS_ACCESS_TOKEN": "",
+
+  "JW_LLM_SERVICE": "mock",
+  "JW_LLM_ENDPOINT": "",
+  "JW_LLM_API_KEY": "",
+  "JW_LLM_MODEL": "",
+  "JW_LLM_TIMEOUT_SECONDS": "30",
+
+  "FEATURE_FLAGS_OVERRIDE_FILE": "./feature_flags.local.json",
+
+  "ENABLE_AI_CHAT": "true"
+}

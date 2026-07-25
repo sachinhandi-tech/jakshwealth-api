@@ -1,0 +1,17 @@
+.venv/
+virtual-env/
+__pycache__/
+*.py[cod]
+*.zip
+config.local.json
+.cicd/credentials
+aws.local.env
+.personal-build.properties
+feature_flags.local.json
+.env
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+dist/
+build/

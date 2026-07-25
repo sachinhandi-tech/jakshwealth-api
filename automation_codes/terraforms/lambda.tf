@@ -1,0 +1,84 @@
+module "jw_authorization" {
+	source = "../../jakshwealth-infra/deploy/lambda"
+	function_name = "jw_authorization"
+	description = "JakshWealth Lambda jw_authorization"
+	s3artifactbucket = "${data.aws_s3_bucket_object.jw_authorization_lambda.bucket}"
+	s3artifactkey = "${data.aws_s3_bucket_object.jw_authorization_lambda.key}"
+	s3objectversion = "${data.aws_s3_bucket_object.jw_authorization_lambda.version_id}"
+	timeout = "30"
+	runtime = "python3.12"
+memory_size = "256"
+	ephemeral_memory = "512"
+	alarm_duration = "890000"
+	layers = []
+	tags = "${var.cigna_tags}"
+	environment = "${var.shortenvironment}"
+	environmental_variables = {"ENVIRONMENT": "dev", "LOG_LEVEL": "INFO"}
+	subnet_ids = "${data.aws_subnets.golden-subnets.ids}"
+	security_group_ids = ["${aws_security_group.lambda_security_group.id}"]
+	destination_arn=  "arn:aws:logs:${data.aws_region.current.name}:${var.splunk_acc_number}:destination:CentralizedLogging-v2-Destination"
+	alert_funnel_arn = "${var.alert_funnel_arn}"
+	}
+module "jw_app_config" {
+	source = "../../jakshwealth-infra/deploy/lambda"
+	function_name = "jw_app_config"
+	description = "JakshWealth Lambda jw_app_config"
+	s3artifactbucket = "${data.aws_s3_bucket_object.jw_app_config_lambda.bucket}"
+	s3artifactkey = "${data.aws_s3_bucket_object.jw_app_config_lambda.key}"
+	s3objectversion = "${data.aws_s3_bucket_object.jw_app_config_lambda.version_id}"
+	timeout = "30"
+	runtime = "python3.12"
+memory_size = "256"
+	ephemeral_memory = "512"
+	alarm_duration = "890000"
+	layers = []
+	tags = "${var.cigna_tags}"
+	environment = "${var.shortenvironment}"
+	environmental_variables = {"ENVIRONMENT": "dev", "LOG_LEVEL": "INFO"}
+	subnet_ids = "${data.aws_subnets.golden-subnets.ids}"
+	security_group_ids = ["${aws_security_group.lambda_security_group.id}"]
+	destination_arn=  "arn:aws:logs:${data.aws_region.current.name}:${var.splunk_acc_number}:destination:CentralizedLogging-v2-Destination"
+	alert_funnel_arn = "${var.alert_funnel_arn}"
+	}
+module "jw_authentication" {
+	source = "../../jakshwealth-infra/deploy/lambda"
+	function_name = "jw_authentication"
+	description = "JakshWealth Lambda jw_authentication"
+	s3artifactbucket = "${data.aws_s3_bucket_object.jw_authentication_lambda.bucket}"
+	s3artifactkey = "${data.aws_s3_bucket_object.jw_authentication_lambda.key}"
+	s3objectversion = "${data.aws_s3_bucket_object.jw_authentication_lambda.version_id}"
+	timeout = "45"
+	runtime = "python3.12"
+memory_size = "512"
+	ephemeral_memory = "512"
+	alarm_duration = "890000"
+	layers = []
+	tags = "${var.cigna_tags}"
+	environment = "${var.shortenvironment}"
+	environmental_variables = {"ENVIRONMENT": "dev", "LOG_LEVEL": "INFO"}
+	subnet_ids = "${data.aws_subnets.golden-subnets.ids}"
+	security_group_ids = ["${aws_security_group.lambda_security_group.id}"]
+	destination_arn=  "arn:aws:logs:${data.aws_region.current.name}:${var.splunk_acc_number}:destination:CentralizedLogging-v2-Destination"
+	alert_funnel_arn = "${var.alert_funnel_arn}"
+	}
+module "jw_secure_data" {
+	source = "../../jakshwealth-infra/deploy/lambda"
+	function_name = "jw_secure_data"
+	description = "JakshWealth Lambda jw_secure_data"
+	s3artifactbucket = "${data.aws_s3_bucket_object.jw_secure_data_lambda.bucket}"
+	s3artifactkey = "${data.aws_s3_bucket_object.jw_secure_data_lambda.key}"
+	s3objectversion = "${data.aws_s3_bucket_object.jw_secure_data_lambda.version_id}"
+	timeout = "60"
+	runtime = "python3.12"
+memory_size = "512"
+	ephemeral_memory = "512"
+	alarm_duration = "890000"
+	layers = []
+	tags = "${var.cigna_tags}"
+	environment = "${var.shortenvironment}"
+	environmental_variables = {"ENVIRONMENT": "dev", "LOG_LEVEL": "INFO"}
+	subnet_ids = "${data.aws_subnets.golden-subnets.ids}"
+	security_group_ids = ["${aws_security_group.lambda_security_group.id}"]
+	destination_arn=  "arn:aws:logs:${data.aws_region.current.name}:${var.splunk_acc_number}:destination:CentralizedLogging-v2-Destination"
+	alert_funnel_arn = "${var.alert_funnel_arn}"
+	}

@@ -1,0 +1,11 @@
+# Umbrella requirements for the local dev server (serve.py) and the test suite.
+# Each Lambda also declares its own runtime deps in lambda/<name>/requirements.txt.
+Flask>=3.0.0
+gunicorn>=22.0.0
+requests>=2.31.0
+python-jose[cryptography]>=3.3.0
+boto3>=1.34.0
+pytest>=8.0.0
+yfinance>=0.2.0
+pandas>=2.0.0
+numpy>=1.26.0

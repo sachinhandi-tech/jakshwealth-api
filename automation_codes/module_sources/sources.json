@@ -1,0 +1,6 @@
+{
+  "api_gateway_resource"   : "../../jakshwealth-infra/deploy/api-gateway-resource",
+  "lambda_permission"      : "../../jakshwealth-infra/deploy/api-lambda-permission",
+  "api_gateway_integration_jw": "../../jakshwealth-infra/deploy/api-gateway-integration-jw",
+  "lambda"                 : "../../jakshwealth-infra/deploy/lambda"
+}

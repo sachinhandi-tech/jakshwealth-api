@@ -1,0 +1,51 @@
+{
+  "text": {
+    "description": "Plain-language answer with no warehouse query.",
+    "example": {
+      "responseType": "text",
+      "content": "I can help you explore claims, members, and providers. Ask for a table or chart."
+    }
+  },
+  "table": {
+    "description": "Tabular response rendered by the UI as a data grid.",
+    "example": {
+      "responseType": "table",
+      "title": "Paid claims by region",
+      "columns": [
+        { "key": "region", "label": "Region" },
+        { "key": "claim_count", "label": "Claim count" },
+        { "key": "total_paid", "label": "Total paid" }
+      ],
+      "presentation": {
+        "labelColumns": ["region", "claim_count", "total_paid"]
+      }
+    }
+  },
+  "chart": {
+    "bar": {
+      "description": "Bar chart using labels and one or more numeric series.",
+      "example": {
+        "responseType": "chart",
+        "chartType": "bar",
+        "chartId": "claims-by-region",
+        "title": "Claims by region",
+        "labelsColumn": "region",
+        "dataColumn": "claim_count"
+      }
+    },
+    "doughnut": {
+      "description": "Doughnut chart with slice labels, values, and optional center copy.",
+      "example": {
+        "responseType": "chart",
+        "chartType": "doughnut",
+        "chartId": "paid-share-by-region",
+        "title": "Paid amount by region",
+        "explanation": "Share of paid amount across regions",
+        "labelsColumn": "region",
+        "dataColumn": "total_paid",
+        "centerLines": ["{{primary_value}}", "top region", "out of {{total}}"],
+        "hoverMessages": ["{{label}}\\n{{value}} paid"]
+      }
+    }
+  }
+}

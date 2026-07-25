@@ -1,0 +1,21 @@
+{
+  "lambda_name": "jw_authorization",
+  "full_path": "/jw-api/lambda-auth",
+  "methods": ["GET", "OPTIONS"],
+  "internet": "true",
+  "role": "authorizer",
+  "description": "API Gateway TOKEN authorizer",
+  "runtime": "python3.12",
+  "handler": "handler.handler",
+  "memory_size": "256",
+  "timeout": "30",
+  "ephemeral_memory": "512",
+  "layers": [],
+  "permissions": {
+    "USER": ["GET", "OPTIONS"]
+  },
+  "environmental_variables": {
+    "ENVIRONMENT": "dev",
+    "LOG_LEVEL": "INFO"
+  }
+}
