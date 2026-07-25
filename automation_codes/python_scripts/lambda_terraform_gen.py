@@ -27,7 +27,7 @@ def lambda_generation(function_name, code_dir, subnet_group, timeout='900', alar
     env_variables = f"{environmental_variables}".replace("\'", "\"")
     runtime = ""
 
-    runtime_lambda_functions = ["jw_authentication", "jw_authorization", "jw_secure_data", "jw_app_config"]
+    runtime_lambda_functions = ["jw_secure_data", "jw_app_config"]
 
 
     if function_name in runtime_lambda_functions:

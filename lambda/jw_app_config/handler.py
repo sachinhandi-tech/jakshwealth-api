@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 
-import bypass_auth
 import config
 import feature_flags
 import responses
@@ -40,8 +39,6 @@ def handler(event, context):
                 "environment": (os.environ.get("ENVIRONMENT") or "dev").strip().lower(),
                 "features": _features(),
                 "enableAiChat": feature_flags.can_manage_ai_chat(),
-                "bypassOktaAuth": bypass_auth.bypass_okta_enabled(),
-                "clientId": (os.environ.get("OKTA_CLIENT_ID") or "").strip(),
             }
         )
     )

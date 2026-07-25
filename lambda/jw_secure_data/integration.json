@@ -3,7 +3,7 @@
   "full_path": "/jw-api/secure-data",
   "allow_subpath": true,
   "methods": ["GET", "POST", "OPTIONS"],
-  "disable_auth": ["OPTIONS"],
+  "disable_auth": ["GET", "POST", "OPTIONS"],
   "internet": "true",
   "description": "Protected business API — all product features under /jw-api/secure-data/*",
   "runtime": "python3.12",

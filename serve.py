@@ -2,11 +2,10 @@
 """Local development server for jakshwealth-api.
 
 Routes HTTP requests to the matching Lambda handler based on each Lambda's
-``integration.json``, and reproduces the API Gateway authorizer in front of
-protected endpoints (those without the request method in ``disable_auth``).
+``integration.json``. All endpoints are public (no authorizer).
 
 Each Lambda is fully self-contained, so the runner isolates per-Lambda modules
-(``config``, ``logger``, ``okta`` ...) between invocations.
+(``config``, ``logger``, ...) between invocations.
 
 Usage:
     cp config.local.example.json config.local.json   # optional local overrides
@@ -27,8 +26,6 @@ from flask import Flask, Response, request
 
 ROOT = Path(__file__).resolve().parent
 LAMBDA_DIR = ROOT / "lambda"
-
-AUTHORIZATION_LAMBDA = "jw_authorization"
 
 _cors_module = None
 
@@ -57,10 +54,10 @@ def _load_app_config() -> None:
     """Fetch AWS secrets and apply local overrides once when the server starts."""
     if os.environ.get("_JW_CONFIG_LOADED") == "1":
         return
-    auth_path = LAMBDA_DIR / "jw_authentication"
-    if str(auth_path) not in sys.path:
-        sys.path.insert(0, str(auth_path))
-    config_file = auth_path / "config.py"
+    config_path = LAMBDA_DIR / "jw_app_config"
+    if str(config_path) not in sys.path:
+        sys.path.insert(0, str(config_path))
+    config_file = config_path / "config.py"
     spec = importlib.util.spec_from_file_location("jw_bootstrap_config", config_file)
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
@@ -91,8 +88,6 @@ def _load_routes() -> None:
         if not entry.is_dir() or not integration.exists():
             continue
         meta = json.loads(integration.read_text(encoding="utf-8"))
-        if meta.get("lambda_name") == AUTHORIZATION_LAMBDA:
-            continue
         full_path = meta["full_path"].strip("/") + "/"
         routes[full_path] = entry.name
         route_meta[full_path] = meta
@@ -145,7 +140,7 @@ def _load_handler(lambda_name: str):
 
 def _prewarm_handlers() -> None:
     """Import Lambdas at startup so the first HTTP request is not a cold start."""
-    for lambda_name in sorted({AUTHORIZATION_LAMBDA, *routes.values()}):
+    for lambda_name in sorted(set(routes.values())):
         try:
             _load_handler(lambda_name)
             print(f"[serve] prewarmed {lambda_name}", flush=True)
@@ -207,30 +202,9 @@ def _deny(message: str, status: int) -> Response:
 
 
 def _authorize(lambda_name, meta, method, endpoint, headers):
-    """Returns (allowed, authorizer_context, error_response)."""
-    if method == "OPTIONS" or method in (meta.get("disable_auth") or []):
-        return True, None, None
-
-    token = _header(headers, "Authorization")
-    if not token:
-        return False, None, _deny("Unauthorized - missing bearer token", 401)
-
-    stage = os.environ.get("ENVIRONMENT", "local")
-    method_arn = f"arn:aws:execute-api:local:000000000000:jwlocal/{stage}/{method}/{endpoint}"
-    try:
-        policy = _invoke_lambda(AUTHORIZATION_LAMBDA, {"authorizationToken": token, "methodArn": method_arn})
-    except Exception:
-        return False, None, _deny("Unauthorized", 401)
-
-    statement = (policy.get("policyDocument", {}).get("Statement") or [{}])[0]
-    if statement.get("Effect") != "Allow":
-        return False, None, _deny(
-            "Forbidden - caller is not a member of a required global group", 403
-        )
-
-    authorizer = {"principalId": policy.get("principalId")}
-    authorizer.update(policy.get("context") or {})
-    return True, authorizer, None
+    """All routes are public for this personal deployment."""
+    del lambda_name, meta, method, endpoint, headers
+    return True, None, None
 
 
 def _to_flask_response(lambda_response: dict) -> Response:

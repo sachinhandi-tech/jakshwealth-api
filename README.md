@@ -1,9 +1,8 @@
 # jakshwealth-api
 
-Backend API for **JakshWealth**. The SPA talks to a small set of Python Lambdas
-behind API Gateway: users sign in through Okta, the API verifies group
-membership, exposes public app metadata, and serves protected business data
-(stock analysis, charts, admin, and future features).
+Backend API for **JakshWealth**. The SPA talks to Python Lambdas behind API Gateway:
+public app metadata and stock analysis endpoints. **No authentication or authorization**
+is required — this is a personal, open-access deployment.
 
 Each Lambda under `lambda/` is self-contained. Configuration comes from a single
 per-environment AWS secret (`{ENVIRONMENT}/jakshwealth/config`), with optional
@@ -31,7 +30,6 @@ always starts from `main`.
 
 - Python 3.12+
 - AWS credentials to read `dev/jakshwealth/config` in Secrets Manager (optional)
-- Network access to Okta
 
 ### Setup
 
@@ -59,40 +57,24 @@ When `ENVIRONMENT=local`, config loads in this order (highest wins):
 Set `CONFIG_SKIP_AWS=true` in `.env` to run offline from `config.local.json`
 only.
 
-### Okta bypass (local and dev only)
-
-Set `JW_BYPASS_OKTA_AUTH=true` in `config.local.json` (local) or in the
-`dev/jakshwealth/config` secret (deployed dev). Bypass is **ignored** when
-`ENVIRONMENT` is `test` or `prod`.
-
-Flow when bypass is on:
-
-1. `GET app-config` returns `"bypassOktaAuth": true`.
-2. The UI skips Okta and redirects to `token-auth/?bypass=true&redirect=true`.
-3. The API issues a `jw-bypass.*` token and redirects the browser to
-   `/authorize#accessToken=...`.
-
 ### Smoke test
 
 ```bash
 curl http://localhost:3000/jw-api/app-config
-curl http://localhost:3000/jw-api/secure-data/stock-universe -H 'Authorization: Bearer <token>'
+curl http://localhost:3000/jw-api/secure-data/stock-universe
 curl -X POST http://localhost:3000/jw-api/secure-data/stock-scan \
-  -H 'Authorization: Bearer <token>' \
   -H 'Content-Type: application/json' \
   -d '{"symbols":["RELIANCE","TCS"],"minScore":60}'
 ```
 
 ## API layout
 
-Four Lambdas make up the API:
+Two Lambdas make up the API:
 
 | Lambda | Path | Role |
 |--------|------|------|
-| `jw_authentication` | `/jw-api/token-auth` | Okta token exchange, refresh, validation |
-| `jw_authorization` | *(API Gateway authorizer)* | JWT verification + group membership |
 | `jw_app_config` | `/jw-api/app-config` | Public app metadata and feature flags |
-| `jw_secure_data` | `/jw-api/secure-data/*` | Protected business API |
+| `jw_secure_data` | `/jw-api/secure-data/*` | Stock analysis and business API (public) |
 
 ### `jw_secure_data` routes
 
@@ -110,7 +92,7 @@ New features: add `lambda/jw_secure_data/features/<name>/` and register in
 ## Tests
 
 ```bash
-pytest lambda/jw_authentication lambda/jw_authorization lambda/jw_secure_data lambda/jw_app_config -v
+pytest lambda/jw_secure_data lambda/jw_app_config -v
 ```
 
 ## Deployment
