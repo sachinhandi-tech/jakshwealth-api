@@ -5,7 +5,7 @@ def props
 def jakshAws(Closure body) {
     withCredentials([[
         $class: 'AmazonWebServicesCredentialsBinding',
-        credentialsId: env.AWS_CREDENTIALS_ID,
+        credentialsId: 'jakshwealth-aws',
         accessKeyVariable: 'AWS_ACCESS_KEY_ID',
         secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
     ]]) {
