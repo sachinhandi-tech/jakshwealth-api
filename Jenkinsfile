@@ -114,7 +114,7 @@ pipeline {
                               https://github.com/sachinhandi-tech/jakshwealth-infra.git jakshwealth-infra
 
                             chmod +x jakshwealth-infra/scripts/terraform-unlock-stale.sh
-                            jakshwealth-infra/scripts/terraform-unlock-stale.sh 30
+                            REMOVE_NON_JENKINS=1 jakshwealth-infra/scripts/terraform-unlock-stale.sh 5
 
                             run_terraform() {
                               local tf_dir="$1"
