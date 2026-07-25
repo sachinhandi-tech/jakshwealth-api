@@ -20,5 +20,5 @@ resource "aws_security_group" "lambda_security_group" {
     }
   ]
 
-  tags = var.cigna_tags
+  tags = var.project_tags
 }

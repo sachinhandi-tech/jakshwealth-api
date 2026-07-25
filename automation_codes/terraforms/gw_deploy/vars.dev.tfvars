@@ -1,3 +1,2 @@
-stage                 = "dev"
-enable_splunk_logging = false
-enable_custom_domain  = false
+stage                = "dev"
+enable_custom_domain = false

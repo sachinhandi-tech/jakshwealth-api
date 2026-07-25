@@ -8,9 +8,9 @@ variable "aws_profile" {
   default = "jakshwealth"
 }
 
-variable "cigna_tags" {
+variable "project_tags" {
   description = "Tags applied to AWS resources"
-  type        = map
+  type        = map(string)
   default = {
     Project     = "jakshwealth"
     Environment = "dev"

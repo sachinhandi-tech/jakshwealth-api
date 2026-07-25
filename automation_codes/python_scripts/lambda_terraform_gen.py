@@ -59,7 +59,7 @@ def lambda_generation(function_name, code_dir, subnet_group, timeout='900', alar
            f"ephemeral_memory = \"{ephemeral_memory}\"\n\t" \
            f"alarm_duration = \"{alarm_duration}\"\n\t" \
            "layers = []\n\t" \
-           "tags = \"${var.cigna_tags}\"\n\t" \
+           "tags = \"${var.project_tags}\"\n\t" \
            "environment = \"${var.shortenvironment}\"\n\t" \
            f"environmental_variables = {env_variables}\n\t" \
            f"{vpc_config}" \
