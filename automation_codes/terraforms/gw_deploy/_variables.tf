@@ -14,6 +14,16 @@ variable "gateway_name" {
   default = "jw-api"
 }
 
+variable "enable_splunk_logging" {
+  type    = bool
+  default = false
+}
+
+variable "enable_custom_domain" {
+  type    = bool
+  default = false
+}
+
 variable "cigna_tags" {
   description = "Maps of tags required for AWS resource"
   type        = map

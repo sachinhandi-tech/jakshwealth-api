@@ -114,7 +114,16 @@ pipeline {
                               https://github.com/sachinhandi-tech/jakshwealth-infra.git jakshwealth-infra
 
                             chmod +x jakshwealth-infra/scripts/terraform-unlock-stale.sh
+                            chmod +x jakshwealth-infra/deploy/api-gateway-integration-jw/lookup_authorizer.sh
                             REMOVE_NON_JENKINS=1 jakshwealth-infra/scripts/terraform-unlock-stale.sh 5
+
+                            API_ID=$(aws apigateway get-rest-apis \
+                              --query "items[?name=='jw-api'].id | [0]" --output text)
+                            if [ -z "${API_ID}" ] || [ "${API_ID}" = "None" ]; then
+                              echo "ERROR: jw-api not found in AWS. Run jakshwealth-infra Jenkins (API Gateway platform stage) first."
+                              exit 1
+                            fi
+                            echo "Found jw-api: ${API_ID}"
 
                             run_terraform() {
                               local tf_dir="$1"

@@ -8,6 +8,7 @@ resource "aws_cloudwatch_log_group" "CCD_APIG_Logs" {
 }
 
 resource "aws_cloudwatch_log_subscription_filter" "splunkAPIG" {
+  count           = var.enable_splunk_logging ? 1 : 0
   depends_on      = [aws_cloudwatch_log_group.CCD_APIG_Logs]
   name            = "CCD_APIG_Logs"
   log_group_name  = "API-Gateway-Execution-Logs_${data.aws_api_gateway_rest_api.rest_api.id}/${var.stage}"
@@ -42,6 +43,7 @@ resource "aws_api_gateway_deployment" "endpoint_deployment" {
 }
 
 resource "aws_api_gateway_base_path_mapping" "ccd_base_path" {
+  count       = var.enable_custom_domain ? 1 : 0
   depends_on  = [aws_api_gateway_stage.ccdapi_stage]
   api_id      = data.aws_api_gateway_rest_api.rest_api.id
   stage_name  = aws_api_gateway_stage.ccdapi_stage.stage_name
