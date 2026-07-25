@@ -9,7 +9,7 @@ DEFAULT_SG = "\"${aws_security_group.lambda_security_group.id}\""
 # Requires a change to infrastructure code as well. . .need variable, etc.
 def lambda_generation(function_name, code_dir, subnet_group, timeout='900', alarm_duration='890000',
                       memory_size='128', ephemeral_memory='512', security_groups_str=None,
-                      environmental_variables=None):
+                      environmental_variables=None, enable_vpc=False):
     """
     Generates and returns a string representing the module for a
     specific {funciton_name} lambda's terraform.
@@ -33,6 +33,19 @@ def lambda_generation(function_name, code_dir, subnet_group, timeout='900', alar
     if function_name in runtime_lambda_functions:
         runtime = "runtime = \"python3.12\"\n"
 
+    if enable_vpc:
+        vpc_config = (
+            f"subnet_ids = \"${'{'}data.aws_subnets.{subnet_group}-subnets.ids{'}'}\"\n\t"
+            f"security_group_ids = [{security_groups_str}]\n\t"
+        )
+    else:
+        vpc_config = (
+            "subnet_ids = []\n\t"
+            "security_group_ids = []\n\t"
+            "alert_funnel_arn = \"\"\n\t"
+            "enable_log_subscription = false\n\t"
+        )
+
     return f"module \"{function_name}\" {'{'}\n\t" \
            f"source = \"{get_module_source('lambda')}\"\n\t" \
            f"function_name = \"{function_name}\"\n\t" \
@@ -49,10 +62,7 @@ def lambda_generation(function_name, code_dir, subnet_group, timeout='900', alar
            "tags = \"${var.cigna_tags}\"\n\t" \
            "environment = \"${var.shortenvironment}\"\n\t" \
            f"environmental_variables = {env_variables}\n\t" \
-           f"subnet_ids = \"${'{'}data.aws_subnets.{subnet_group}-subnets.ids{'}'}\"\n\t" \
-           f"security_group_ids = [{security_groups_str}]\n\t" \
-           f"destination_arn=  \"arn:aws:logs:${'{'}data.aws_region.current.name{'}'}:${'{'}var.splunk_acc_number{'}'}:destination:CentralizedLogging-v2-Destination\"\n\t" \
-           f"alert_funnel_arn = \"${'{'}var.alert_funnel_arn{'}'}\"\n\t" \
+           f"{vpc_config}" \
            "}\n"
 
 
@@ -103,6 +113,10 @@ def create_lambda_tf(env, code_dir, terraform_dir):
     :return: None
     """
 
+    with open('user_params.json') as json_file:
+        user_params = json.load(json_file)
+        enable_vpc = user_params.get('enable_lambda_vpc', False)
+
     # Get the list of lambda functions in {the code_dir}
     lambda_functions = get_lambda_functions_list(code_dir)
 
@@ -149,7 +163,8 @@ def create_lambda_tf(env, code_dir, terraform_dir):
                                                  security_groups_str=get_security_groups_str(
                                                      integration_parameters=lambda_integration_parameters),
                                                  environmental_variables=lambda_integration_parameters[
-                                                     'environmental_variables'])
+                                                     'environmental_variables'],
+                                                 enable_vpc=enable_vpc)
 
         # Update role if needed
         update_policies_if_needed(env, lambda_integration_parameters, terraform_dir)

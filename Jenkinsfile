@@ -58,17 +58,11 @@ pipeline {
         stage('Set environment') {
             steps {
                 script {
-                    if (env.BRANCH_NAME == 'main' || env.BRANCH_NAME == 'master') {
-                        props = readProperties file: "${WORKSPACE}/.cicd/build_props/prod-build.properties"
-                    } else if (env.BRANCH_NAME == 'test') {
-                        props = readProperties file: "${WORKSPACE}/.cicd/build_props/test-build.properties"
-                    } else {
-                        props = readProperties file: "${WORKSPACE}/.cicd/build_props/dev-build.properties"
-                    }
+                    props = readProperties file: "${WORKSPACE}/.cicd/build_props/build.properties"
                     env.AWS_CREDENTIALS_ID = (props.aws_credentials_id ?: '').trim()
                     env.AWS_PROFILE = props.aws_profile ?: 'jakshwealth'
                     env.AWS_REGION = props.aws_region ?: 'us-east-1'
-                    env.DEPLOY_ENV = props.deploy_env
+                    env.DEPLOY_ENV = props.deploy_env ?: 'dev'
                 }
             }
         }
@@ -124,11 +118,11 @@ pipeline {
                               local stack_name="$2"
                               echo "terraform ${TF_ACTION} — ${stack_name}"
                               cd "${tf_dir}"
-                              terraform init -backend-config="backend.${DEPLOY_ENV}.tfvars"
+                              terraform init -backend-config="backend.dev.tfvars"
                               if [ "${TF_ACTION}" = "destroy" ]; then
-                                terraform plan -destroy -var-file="vars.${DEPLOY_ENV}.tfvars" -out=tfplan.out
+                                terraform plan -destroy -var-file="vars.dev.tfvars" -out=tfplan.out
                               else
-                                terraform plan -var-file="vars.${DEPLOY_ENV}.tfvars" -out=tfplan.out
+                                terraform plan -var-file="vars.dev.tfvars" -out=tfplan.out
                               fi
                               terraform apply -auto-approve tfplan.out
                             }

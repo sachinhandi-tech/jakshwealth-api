@@ -1,5 +1,6 @@
 {
-  "s3_bucket_details" : {
-    "lambda_bucket" : "jw-api"
-  }
+  "s3_bucket_details": {
+    "lambda_bucket": "jw-api"
+  },
+  "enable_lambda_vpc": false
 }

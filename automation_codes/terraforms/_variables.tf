@@ -9,32 +9,12 @@ variable "aws_profile" {
 }
 
 variable "cigna_tags" {
-  description = "Maps of tags required for AWS resource"
+  description = "Tags applied to AWS resources"
   type        = map
   default = {
-    CostCenter             = "00079544"
-    AssetOwner             = "CHARAN.SINGH@evernorth.com"
-    ServiceNowBA           = "BA12659"
-    CiId                   = "CI0009117016"
-    ServiceNowAS           = "AS019069"
-    SecurityReviewID       = "ASAQ-1484748"
-    AsaqId                 = "ASAQ-724791"
-    Purpose                = "High Performance Providers - Self Service Analytics"
-    Version                = "0.0.1"
-    BackupOwner            = "mrinal.patwardhan@evernorth.com"
-    DataSubjectArea        = "provider"
-    ComplianceDataCategory = "pii:hipaa"
-    DataClassification     = "confidential"
-    BusinessEntity         = "evernorth"
-    LineOfBusiness         = "commercial"
-    RegionalRestriction    = "us-east-1"
-    DataOwner              = "gregory.smith2@evernorth.com"
-    DataCustodian          = "sridhar.talluri@evernorth.com"
-    Inspect                = "N"
-    project                = "JakshWealth"
-    ResourceName           = "JakshWealth"
-    ResourceOwner          = "CM DNA JakshWealth"
-    DataRetentionCode      = "7 Years"
+    Project     = "jakshwealth"
+    Environment = "dev"
+    ManagedBy   = "terraform"
   }
 }
 
@@ -43,14 +23,21 @@ variable "shortenvironment" {
 }
 
 variable "team_name" {
-  default = "ssa"
+  default = "jw"
+}
+
+variable "enable_lambda_vpc" {
+  description = "Place Lambdas inside a VPC (requires jakshwealth-vpc from bootstrap)"
+  type        = bool
+  default     = false
 }
 
 variable "splunk_acc_number" {
-  description = "centralised splunk account number"
-  default     = "746770431074"
+  description = "Unused for personal deploy"
+  default     = ""
 }
 
 variable "alert_funnel_arn" {
-  description = "centralized funnel arn"
+  description = "SNS topic for CloudWatch alarms; leave empty to skip"
+  default     = ""
 }

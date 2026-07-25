@@ -1,7 +1,8 @@
 resource "aws_security_group" "lambda_security_group" {
+  count       = var.enable_lambda_vpc ? 1 : 0
   name        = "${var.team_name}_lambda_security_group"
   description = "JakshWealth Lambda egress for HTTPS (Okta, Secrets Manager)"
-  vpc_id      = data.aws_vpc.golden.id
+  vpc_id      = data.aws_vpc.golden[0].id
 
   ingress = []
 
