@@ -130,7 +130,7 @@ pipeline {
                               local stack_name="$2"
                               echo "terraform ${TF_ACTION} — ${stack_name}"
                               cd "${tf_dir}"
-                              terraform init -backend-config="backend.dev.tfvars"
+                              terraform init -input=false -reconfigure -backend-config="backend.dev.tfvars"
                               if [ "${TF_ACTION}" = "destroy" ]; then
                                 terraform plan -destroy -lock-timeout=10m -var-file="vars.dev.tfvars" -out=tfplan.out
                               else
