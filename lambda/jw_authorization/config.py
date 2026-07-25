@@ -48,7 +48,7 @@ def _fetch_secret(name: str) -> dict:
     region = (
         os.environ.get("AWS_REGION")
         or os.environ.get("AWS_DEFAULT_REGION")
-        or "us-east-1"
+        or "ap-south-2"
     )
     boto_config = BotoConfig(
         connect_timeout=5,

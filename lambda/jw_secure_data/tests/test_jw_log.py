@@ -38,7 +38,7 @@ def test_call_external_raises_on_access_denied(monkeypatch):
 
 @patch("boto3.client")
 def test_fetch_secret_uses_timeouts(mock_client, monkeypatch):
-    monkeypatch.setenv("AWS_REGION", "us-east-1")
+    monkeypatch.setenv("AWS_REGION", "ap-south-2")
     monkeypatch.setattr(jw_log, "emit", lambda *args, **kwargs: None)
     client = MagicMock()
     client.get_secret_value.return_value = {"SecretString": '{"OKTA_URL":"https://example"}'}

@@ -61,7 +61,7 @@ pipeline {
                     props = readProperties file: "${WORKSPACE}/.cicd/build_props/build.properties"
                     env.AWS_CREDENTIALS_ID = (props.aws_credentials_id ?: '').trim()
                     env.AWS_PROFILE = props.aws_profile ?: 'jakshwealth'
-                    env.AWS_REGION = props.aws_region ?: 'us-east-1'
+                    env.AWS_REGION = props.aws_region ?: 'ap-south-2'
                     env.DEPLOY_ENV = props.deploy_env ?: 'dev'
                 }
             }

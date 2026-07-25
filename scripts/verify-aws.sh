@@ -6,7 +6,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 [[ -f "${ROOT}/aws.local.env" ]] && source "${ROOT}/aws.local.env"
 
 export AWS_PROFILE="${AWS_PROFILE:-jakshwealth}"
-export AWS_REGION="${AWS_REGION:-us-east-1}"
+export AWS_REGION="${AWS_REGION:-ap-south-2}"
 
 echo "Using AWS_PROFILE=${AWS_PROFILE} AWS_REGION=${AWS_REGION}"
 aws sts get-caller-identity

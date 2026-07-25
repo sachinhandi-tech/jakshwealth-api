@@ -13,7 +13,7 @@ if [ -f aws.local.env ]; then
   source aws.local.env
 fi
 export AWS_PROFILE="${AWS_PROFILE:-jakshwealth}"
-export AWS_REGION="${AWS_REGION:-us-east-1}"
+export AWS_REGION="${AWS_REGION:-ap-south-2}"
 
 export ENVIRONMENT="${ENVIRONMENT:-local}"
 export LOCAL_CONFIG_FILE="${LOCAL_CONFIG_FILE:-$(pwd)/config.local.json}"

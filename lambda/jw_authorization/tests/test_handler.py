@@ -10,7 +10,7 @@ handler = importlib.util.module_from_spec(_spec)
 assert _spec.loader is not None
 _spec.loader.exec_module(handler)
 
-ARN = "arn:aws:execute-api:us-east-1:123:api/dev/GET/secure-data"
+ARN = "arn:aws:execute-api:ap-south-2:123:api/dev/GET/secure-data"
 
 
 def _effect(policy):

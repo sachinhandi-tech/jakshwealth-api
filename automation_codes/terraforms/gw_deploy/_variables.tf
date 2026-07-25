@@ -2,7 +2,7 @@ variable "stage" {
   default = "dev"
 }
 variable "aws_region" {
-  default = "us-east-1"
+  default = "ap-south-2"
 }
 variable "aws_cred_file_loc" {
   default = "/root/.aws/credentials"
@@ -33,7 +33,7 @@ variable "cigna_tags" {
     DataClassification     = "confidential"
     BusinessEntity         = "evernorth"
     LineOfBusiness         = "commercial"
-    RegionalRestriction    = "us-east-1"
+    RegionalRestriction    = "ap-south-2"
     DataOwner              = "gregory.smith2@evernorth.com"
     DataCustodian          = "sridhar.talluri@evernorth.com"
     Inspect                = "N"
