@@ -113,6 +113,9 @@ pipeline {
                             git clone --branch main --single-branch --depth 1 \
                               https://github.com/sachinhandi-tech/jakshwealth-infra.git jakshwealth-infra
 
+                            chmod +x jakshwealth-infra/scripts/terraform-unlock-stale.sh
+                            jakshwealth-infra/scripts/terraform-unlock-stale.sh 30
+
                             run_terraform() {
                               local tf_dir="$1"
                               local stack_name="$2"
@@ -120,9 +123,9 @@ pipeline {
                               cd "${tf_dir}"
                               terraform init -backend-config="backend.dev.tfvars"
                               if [ "${TF_ACTION}" = "destroy" ]; then
-                                terraform plan -destroy -var-file="vars.dev.tfvars" -out=tfplan.out
+                                terraform plan -destroy -lock-timeout=10m -var-file="vars.dev.tfvars" -out=tfplan.out
                               else
-                                terraform plan -var-file="vars.dev.tfvars" -out=tfplan.out
+                                terraform plan -lock-timeout=10m -var-file="vars.dev.tfvars" -out=tfplan.out
                               fi
                               terraform apply -auto-approve tfplan.out
                             }
