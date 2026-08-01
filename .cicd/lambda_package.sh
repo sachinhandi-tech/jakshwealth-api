@@ -8,20 +8,52 @@ lambda_dir="${1:?lambda directory required}"
 cd "$lambda_dir"
 
 LAMBDA_NAME=$(basename "$(pwd)")
+# Must match automation_codes/terraforms/lambda.tf runtime (python3.12).
+LAMBDA_PYTHON_VERSION="${LAMBDA_PYTHON_VERSION:-3.12}"
+LAMBDA_PLATFORM="${LAMBDA_PLATFORM:-manylinux2014_x86_64}"
+
+resolve_python_bin() {
+    if [ -n "${PYTHON_BIN:-}" ] && command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
+        echo "${PYTHON_BIN}"
+        return 0
+    fi
+    if command -v "python${LAMBDA_PYTHON_VERSION}" >/dev/null 2>&1; then
+        echo "python${LAMBDA_PYTHON_VERSION}"
+        return 0
+    fi
+    if command -v python3 >/dev/null 2>&1; then
+        echo python3
+        return 0
+    fi
+    echo "ERROR: no Python interpreter found (need python${LAMBDA_PYTHON_VERSION} or python3)" >&2
+    exit 1
+}
 
 tf-update() {
     pip install --upgrade pip
     pip install -r requirements.txt
 }
 
+install_lambda_deps() {
+    # Cross-build Linux cp312 wheels so Jenkins/macOS hosts match Lambda (Amazon Linux, Python 3.12).
+    pip install -r requirements.txt -t package/ \
+        --platform "${LAMBDA_PLATFORM}" \
+        --python-version "${LAMBDA_PYTHON_VERSION}" \
+        --implementation cp \
+        --only-binary=:all: \
+        --upgrade
+}
+
 tf-genupload() {
     local current
+    local python_bin
     current=$(pwd)
+    python_bin="$(resolve_python_bin)"
 
     deactivate 2>/dev/null || true
 
     if [ ! -d "tf-virtual-env" ]; then
-        python3 -m venv tf-virtual-env
+        "${python_bin}" -m venv tf-virtual-env
     fi
 
     # shellcheck disable=SC1091
@@ -44,7 +76,7 @@ tf-genupload() {
         cp certs/corp-ca.pem package/certs/corp-ca.pem
     fi
 
-    pip install -r requirements.txt -t package/
+    install_lambda_deps
 
     cd package || exit 1
     rm -rf pip* pkg_resources *pycache* pylint* setuptools* 2>/dev/null || true
