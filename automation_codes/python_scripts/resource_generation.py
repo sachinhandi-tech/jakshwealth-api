@@ -89,7 +89,7 @@ def create_data_tf_integration(ext_integration):
     for path in ext_integration:
         formatted_path = path.replace('/', '_').replace('-', '_')
         integration_resource_string += f"data \"aws_api_gateway_resource\" \"gateway_resource{formatted_path}\" {'{'}\n\t" \
-                                       "rest_api_id = \"${data.aws_api_gateway_rest_api.rest_api.id}\"\n\t" \
+                                       "rest_api_id = var.rest_api_id\n\t" \
                                        f"path = \"{path}\"\n" \
                                        "}\n"
     return integration_resource_string
@@ -103,10 +103,13 @@ def create_data_tf(lambda_directories, terraform_dir, rest_api_name):
     :param rest_api_name: (str) The name of api gateway.  Ex. ccd-api
     :return: None
     """
-    data_string = f"data \"aws_api_gateway_rest_api\" \"rest_api\" {'{'}\n\t" \
-                  f"name = \"{rest_api_name}\"\n" \
-                  "}\n\n" \
-                  f"data \"aws_region\" \"current\" {'{''}'}\n\n"
+    data_string = (
+        'data "aws_api_gateway_resource" "rest_api_root" {\n'
+        '\trest_api_id = var.rest_api_id\n'
+        '\tpath        = "/"\n'
+        '}\n\n'
+        'data "aws_region" "current" {}\n\n'
+    )
 
 
     # TODO identify why we're doing this
@@ -121,7 +124,7 @@ def get_parent_resource_id(parent, code_dir):
     internal_parent_id = set(obj['internal_parent_integration'])
     external_parent_id = set(obj['external_parent_integration'])
     if parent == '':
-        return "${data.aws_api_gateway_rest_api.rest_api.root_resource_id}"
+        return "${data.aws_api_gateway_resource.rest_api_root.id}"
     if parent in internal_parent_id:
         return '${module.' + parent[1:].replace('/', '_').replace('-', '_') + '_resource.resource_id}'
     if parent in external_parent_id:

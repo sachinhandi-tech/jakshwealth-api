@@ -63,6 +63,7 @@ pipeline {
                     env.AWS_PROFILE = props.aws_profile ?: 'jakshwealth'
                     env.AWS_REGION = props.aws_region ?: 'ap-south-2'
                     env.DEPLOY_ENV = props.deploy_env ?: 'dev'
+                    env.REST_API_ID = (props.rest_api_id ?: '').trim()
                 }
             }
         }
@@ -117,13 +118,18 @@ pipeline {
                             chmod +x jakshwealth-infra/deploy/api-gateway-integration-jw/lookup_authorizer.sh
                             REMOVE_NON_JENKINS=1 jakshwealth-infra/scripts/terraform-unlock-stale.sh 5
 
-                            API_ID=$(aws apigateway get-rest-apis \
-                              --query "items[?name=='jw-api'].id | [0]" --output text)
+                            API_ID="${REST_API_ID}"
+                            if [ -z "${API_ID}" ] || [ "${API_ID}" = "None" ]; then
+                              API_ID=$(aws apigateway get-rest-apis \
+                                --query "items[?name=='jw-api'] | sort_by(@, &createdDate)[0].id" --output text)
+                            fi
                             if [ -z "${API_ID}" ] || [ "${API_ID}" = "None" ]; then
                               echo "ERROR: jw-api not found in AWS. Run jakshwealth-infra Jenkins (API Gateway platform stage) first."
                               exit 1
                             fi
-                            echo "Found jw-api: ${API_ID}"
+                            echo "Using jw-api: ${API_ID}"
+
+                            TF_VARS="-var-file=vars.dev.tfvars -var=rest_api_id=${API_ID}"
 
                             run_terraform() {
                               local tf_dir="$1"
@@ -138,16 +144,16 @@ pipeline {
                                     --rest-api-id "${API_ID}" \
                                     --stage-name "${DEPLOY_ENV}" >/dev/null 2>&1; then
                                     echo "Importing existing API Gateway stage ${API_ID}/${DEPLOY_ENV}"
-                                    terraform import -input=false -var-file="vars.dev.tfvars" \
+                                    terraform import -input=false ${TF_VARS} \
                                       aws_api_gateway_stage.jw_api_stage "${API_ID}/${DEPLOY_ENV}"
                                   fi
                                 fi
                               fi
 
                               if [ "${TF_ACTION}" = "destroy" ]; then
-                                terraform plan -destroy -lock-timeout=10m -var-file="vars.dev.tfvars" -out=tfplan.out
+                                terraform plan -destroy -lock-timeout=10m ${TF_VARS} -out=tfplan.out
                               else
-                                terraform plan -lock-timeout=10m -var-file="vars.dev.tfvars" -out=tfplan.out
+                                terraform plan -lock-timeout=10m ${TF_VARS} -out=tfplan.out
                               fi
                               terraform apply -auto-approve tfplan.out
                             }
@@ -176,8 +182,11 @@ pipeline {
                 script {
                     jakshAws {
                         sh '''
-                            API_ID=$(aws apigateway get-rest-apis \
-                              --query "items[?name=='jw-api'].id | [0]" --output text)
+                            API_ID="${REST_API_ID}"
+                            if [ -z "${API_ID}" ] || [ "${API_ID}" = "None" ]; then
+                              API_ID=$(aws apigateway get-rest-apis \
+                                --query "items[?name=='jw-api'] | sort_by(@, &createdDate)[0].id" --output text)
+                            fi
                             aws apigateway create-deployment \
                               --rest-api-id "${API_ID}" \
                               --stage-name "${DEPLOY_ENV}" \

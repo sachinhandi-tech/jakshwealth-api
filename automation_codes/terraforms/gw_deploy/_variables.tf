@@ -1,3 +1,8 @@
+variable "rest_api_id" {
+  type        = string
+  description = "API Gateway REST API id (pin to avoid ambiguous name lookup)."
+}
+
 variable "stage" {
   default = "dev"
 }

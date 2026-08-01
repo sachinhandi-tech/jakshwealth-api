@@ -8,13 +8,13 @@ def api_gateway_integration_generation(module_name, methods, path, lambda_name, 
     if root_resource_id:
         parent_resource_ref = root_resource_id
     elif parent == '':
-        parent_resource_ref = "${data.aws_api_gateway_rest_api.rest_api.root_resource_id}"
+        parent_resource_ref = "${data.aws_api_gateway_resource.rest_api_root.id}"
     else:
         parent_resource_ref = get_parent_resource_id(parent, code_dir)
 
     resource_module = f"\nmodule \"{module_name}_resource\" {'{'} \n\t" \
                       f"source = \"{get_module_source('api_gateway_resource')}\"\n\t" \
-                      "rest_api_id = \"${data.aws_api_gateway_rest_api.rest_api.id}\"\n\t" \
+                      "rest_api_id = var.rest_api_id\n\t" \
                       f"root_resource_id = \"{parent_resource_ref}\"\n\t" \
                       f"path = \"{path}\"\n" \
                       "}"
@@ -24,7 +24,7 @@ def api_gateway_integration_generation(module_name, methods, path, lambda_name, 
 
     lambda_permission_module = f"\nmodule \"{module_name}_lambda_permission\" {'{'}\n\t" \
                             f"source = \"{get_module_source('lambda_permission')}\"\n\t" \
-                            "rest_api_id = \"${data.aws_api_gateway_rest_api.rest_api.id}\"\n\t" \
+                            "rest_api_id = var.rest_api_id\n\t" \
                             f"lambda = \"${'{'}module.{lambda_name}.name{'}'}\"\n\t" \
                             "region = \"${var.aws_region}\"\n\t" \
                             "account_id  = \"${data.aws_caller_identity.current.account_id}\"\n" \
@@ -48,7 +48,7 @@ def api_gateway_integration_generation(module_name, methods, path, lambda_name, 
 
         integration_module += f"\nmodule \"{str.lower(method)}_{module_name}\" {'{'}\n\t" \
                               f"source = \"{get_module_source('api_gateway_integration_jw')}\"\n\t" \
-                              "rest_api_id = \"${data.aws_api_gateway_rest_api.rest_api.id}\"\n\t" \
+                              "rest_api_id = var.rest_api_id\n\t" \
                               f"resource_id = \"${'{'}module.{module_name}_resource.resource_id{'}'}\"\n\t" \
                               f"method = \"{method}\"\n\t" \
                               f"path = \"${'{'}module.{module_name}_resource.path{'}'}\"\n\t" \
