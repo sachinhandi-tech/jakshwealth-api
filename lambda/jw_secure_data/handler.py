@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 
 import config
@@ -9,11 +10,13 @@ import responses
 import secure_data_debug as debug
 from caller_context import lan_id_from_authorizer, roles_from_authorizer
 from features import FEATURE_ROUTES
+from features.stock_scan import async_service
 from routing import dispatch_feature_routes, route_suffix
 from jw_log import Request
 
 config.load_config()
 _SERVICE = "jw_secure_data"
+_INTERNAL_JOB = "stock_scan_job"
 
 
 def _secure_data_payload(event, authorizer: dict) -> dict:
@@ -30,6 +33,23 @@ def _secure_data_payload(event, authorizer: dict) -> dict:
 
 
 def handler(event, context):
+    if isinstance(event, dict) and event.get("internal") == _INTERNAL_JOB:
+        job_id = str(event.get("jobId") or "").strip()
+        if job_id:
+            async_service.execute_job(job_id)
+        return {"ok": True}
+
+    if isinstance(event, (str, bytes)):
+        try:
+            event = json.loads(event)
+            if isinstance(event, dict) and event.get("internal") == _INTERNAL_JOB:
+                job_id = str(event.get("jobId") or "").strip()
+                if job_id:
+                    async_service.execute_job(job_id)
+                return {"ok": True}
+        except json.JSONDecodeError:
+            pass
+
     req = Request(_SERVICE, event, context)
     responses.bind_request_origin(event)
     method = (event or {}).get("httpMethod")

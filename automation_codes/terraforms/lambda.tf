@@ -5,7 +5,7 @@ module "jw_secure_data" {
 	s3artifactbucket = "${data.aws_s3_bucket_object.jw_secure_data_lambda.bucket}"
 	s3artifactkey = "${data.aws_s3_bucket_object.jw_secure_data_lambda.key}"
 	s3objectversion = "${data.aws_s3_bucket_object.jw_secure_data_lambda.version_id}"
-	timeout = "60"
+	timeout = "900"
 	runtime = "python3.12"
 memory_size = "512"
 	ephemeral_memory = "512"

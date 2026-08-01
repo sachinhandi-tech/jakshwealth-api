@@ -22,6 +22,12 @@ class FeatureRoute:
     path: str
     methods: frozenset[str]
     handle: FeatureHandler
+    path_prefix: str | None = None
+
+    def matches(self, suffix: str) -> bool:
+        if self.path_prefix:
+            return suffix.startswith(self.path_prefix) and len(suffix) > len(self.path_prefix)
+        return suffix == self.path
 
     def dispatch(
         self,
@@ -75,6 +81,6 @@ def dispatch_feature_routes(
 ) -> dict | None:
     """Return a response when a feature route matches; otherwise None."""
     for route in routes:
-        if suffix == route.path:
+        if route.matches(suffix):
             return route.dispatch(event, trace, authorizer, method)
     return None

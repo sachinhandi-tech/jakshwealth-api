@@ -7,7 +7,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 import pandas as pd
@@ -376,28 +376,42 @@ def _scan_options_kwargs(options: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in options.items() if k not in {"min_score", "sleep", "max_workers"}}
 
 
-def _scan_symbols(symbols: list[str], options: dict[str, Any]) -> list[dict[str, Any]]:
+def _scan_symbols(
+    symbols: list[str],
+    options: dict[str, Any],
+    *,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> list[dict[str, Any]]:
     scan_kwargs = _scan_options_kwargs(options)
     max_workers = max(1, min(int(options.get("max_workers", DEFAULT_MAX_WORKERS)), 16))
     sleep = float(options.get("sleep", DEFAULT_SLEEP))
+    total = len(symbols)
+
+    def report(completed: int) -> None:
+        if on_progress is not None:
+            on_progress(completed, total)
 
     if len(symbols) <= 1 or max_workers == 1:
         rows: list[dict[str, Any]] = []
-        for symbol in symbols:
+        for index, symbol in enumerate(symbols, start=1):
             row = scan_symbol(symbol, **scan_kwargs)
             if row:
                 rows.append(row)
+            report(index)
             if sleep > 0:
                 time.sleep(sleep)
         return rows
 
     rows = []
+    completed = 0
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [executor.submit(scan_symbol, symbol, **scan_kwargs) for symbol in symbols]
         for future in as_completed(futures):
             row = future.result()
             if row:
                 rows.append(row)
+            completed += 1
+            report(completed)
     return rows
 
 
@@ -424,25 +438,39 @@ def _normalize_options(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def run_scan(payload: dict[str, Any]) -> dict[str, Any]:
+def resolve_scan_symbols(payload: dict[str, Any]) -> list[str]:
+    """Resolve the symbol list for a scan request (shared by sync and async paths)."""
+    segment = payload.get("universeSegment") or payload.get("segment")
+    raw_symbols = payload.get("symbols")
+    if isinstance(raw_symbols, list) and raw_symbols:
+        symbols = sorted(set(normalize_nse_symbol(s) for s in raw_symbols if str(s).strip()))
+        return [s for s in symbols if s]
+
+    limit = payload.get("symbolLimit")
+    symbol_limit = int(limit) if limit is not None else None
+    return universe_symbols(str(segment) if segment else None, symbol_limit)
+
+
+def run_scan(
+    payload: dict[str, Any],
+    *,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> dict[str, Any]:
     options = _normalize_options(payload)
 
     segment = payload.get("universeSegment") or payload.get("segment")
     raw_symbols = payload.get("symbols")
     if isinstance(raw_symbols, list) and raw_symbols:
-        symbols = sorted(set(normalize_nse_symbol(s) for s in raw_symbols if str(s).strip()))
-        symbols = [s for s in symbols if s]
+        symbols = resolve_scan_symbols(payload)
         resolved_segment = "custom"
     else:
         resolved_segment = (str(segment).strip().lower() if segment else DEFAULT_UNIVERSE_SEGMENT)
-        limit = payload.get("symbolLimit")
-        symbol_limit = int(limit) if limit is not None else None
-        symbols = universe_symbols(str(segment) if segment else None, symbol_limit)
+        symbols = resolve_scan_symbols(payload)
 
     if not symbols:
         raise ValueError("No symbols to scan.")
 
-    rows = _scan_symbols(symbols, options)
+    rows = _scan_symbols(symbols, options, on_progress=on_progress)
 
     results = pd.DataFrame(rows)
     if results.empty:

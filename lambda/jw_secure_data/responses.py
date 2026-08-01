@@ -37,5 +37,14 @@ def method_not_allowed(message: str) -> dict:
     return _response(HTTPStatus.METHOD_NOT_ALLOWED, {"message": message})
 
 
+def not_found(message: str | dict) -> dict:
+    body = message if isinstance(message, dict) else {"message": message}
+    return _response(HTTPStatus.NOT_FOUND, body)
+
+
 def options() -> dict:
     return _response(HTTPStatus.OK, {"message": "ok"})
+
+
+def accepted(body) -> dict:
+    return _response(HTTPStatus.ACCEPTED, body)

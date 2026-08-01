@@ -8,6 +8,8 @@ from features.admin import FEATURES_ROUTE as admin_features_route
 from features.admin import ROUTE as admin_route
 from features.ai_chat import ROUTE as ai_chat_route
 from features.fetch_charts import ROUTE as fetch_charts_route
+from features.stock_scan.handler import ASYNC_ROUTE as stock_scan_async_route
+from features.stock_scan.handler import JOB_ROUTE as stock_scan_job_route
 from features.stock_scan.handler import ROUTE as stock_scan_route
 from features.stock_scan.handler import UNIVERSE_ROUTE as stock_universe_route
 from routing import FeatureRoute
@@ -17,6 +19,8 @@ FEATURE_ROUTES: tuple[FeatureRoute, ...] = (
     admin_features_route,
     ai_chat_route,
     fetch_charts_route,
+    stock_scan_async_route,
+    stock_scan_job_route,
     stock_scan_route,
     stock_universe_route,
 )
