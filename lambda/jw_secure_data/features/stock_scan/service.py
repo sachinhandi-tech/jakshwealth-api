@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import math
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -20,10 +22,25 @@ DEFAULT_VOL_SLOW_LEN = 20
 DEFAULT_VOL_MULTIPLIER = 1.5
 DEFAULT_LOOKBACK_YEARS = 5
 DEFAULT_MIN_SCORE = 80
-DEFAULT_SLEEP = 0.15
+DEFAULT_SLEEP = 0.0
+DEFAULT_MAX_WORKERS = 8
+# API Gateway REST integrations time out at ~29s regardless of Lambda timeout.
+API_GATEWAY_SYNC_BUDGET_SEC = 29
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 DEFAULT_UNIVERSE_CSV = DATA_DIR / "indian_stocks.csv"
+
+UNIVERSE_SEGMENTS: dict[str, dict[str, str]] = {
+    "midcap": {
+        "label": "Nifty Midcap 150",
+        "file": "nifty_midcap150.csv",
+    },
+    "smallcap": {
+        "label": "Nifty Smallcap 250",
+        "file": "nifty_smallcap250.csv",
+    },
+}
+DEFAULT_UNIVERSE_SEGMENT = "midcap"
 
 
 def normalize_nse_symbol(raw_symbol: str) -> str:
@@ -67,20 +84,47 @@ def load_symbols_from_csv(csv_path: Path | str) -> list[str]:
     return symbols
 
 
-def default_universe_symbols(limit: int | None = None) -> list[str]:
-    symbols = load_symbols_from_csv(DEFAULT_UNIVERSE_CSV)
+def resolve_universe_csv(segment: str | None = None) -> Path:
+    key = (segment or DEFAULT_UNIVERSE_SEGMENT).strip().lower()
+    if key not in UNIVERSE_SEGMENTS:
+        known = ", ".join(sorted(UNIVERSE_SEGMENTS))
+        raise ValueError(f"Unknown universe segment '{segment}'. Expected one of: {known}")
+    return DATA_DIR / UNIVERSE_SEGMENTS[key]["file"]
+
+
+def universe_symbols(segment: str | None = None, limit: int | None = None) -> list[str]:
+    symbols = load_symbols_from_csv(resolve_universe_csv(segment))
     if limit is not None and limit > 0:
         return symbols[:limit]
     return symbols
 
 
-def universe_info() -> dict[str, Any]:
-    symbols = default_universe_symbols()
+def default_universe_symbols(limit: int | None = None) -> list[str]:
+    return universe_symbols(DEFAULT_UNIVERSE_SEGMENT, limit)
+
+
+def universe_info(segment: str | None = None) -> dict[str, Any]:
+    key = (segment or DEFAULT_UNIVERSE_SEGMENT).strip().lower()
+    meta = UNIVERSE_SEGMENTS[key]
+    csv_path = resolve_universe_csv(key)
+    symbols = universe_symbols(key)
     return {
-        "source": str(DEFAULT_UNIVERSE_CSV.name),
+        "segment": key,
+        "label": meta["label"],
+        "source": csv_path.name,
         "symbolCount": len(symbols),
         "sampleSymbols": symbols[:10],
     }
+
+
+def _passes_ranked_filter(row: dict[str, Any], min_score: int, strict_rsi_30: bool) -> bool:
+    if row.get("Scan_Status") != "OK":
+        return False
+    if int(row.get("Score", 0)) < min_score:
+        return False
+    if strict_rsi_30 and not row.get("RSI_Valid"):
+        return False
+    return True
 
 
 def calculate_rsi(close: pd.Series, length: int = 14) -> pd.Series:
@@ -294,6 +338,52 @@ def scan_symbol(
         }
 
 
+def _sanitize_value(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    return value
+
+
+def _sanitize_record(record: dict[str, Any]) -> dict[str, Any]:
+    return {key: _sanitize_value(value) for key, value in record.items()}
+
+
+def _scan_options_kwargs(options: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in options.items() if k not in {"min_score", "sleep", "max_workers"}}
+
+
+def _scan_symbols(symbols: list[str], options: dict[str, Any]) -> list[dict[str, Any]]:
+    scan_kwargs = _scan_options_kwargs(options)
+    max_workers = max(1, min(int(options.get("max_workers", DEFAULT_MAX_WORKERS)), 16))
+    sleep = float(options.get("sleep", DEFAULT_SLEEP))
+
+    if len(symbols) <= 1 or max_workers == 1:
+        rows: list[dict[str, Any]] = []
+        for symbol in symbols:
+            row = scan_symbol(symbol, **scan_kwargs)
+            if row:
+                rows.append(row)
+            if sleep > 0:
+                time.sleep(sleep)
+        return rows
+
+    rows = []
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(scan_symbol, symbol, **scan_kwargs) for symbol in symbols]
+        for future in as_completed(futures):
+            row = future.result()
+            if row:
+                rows.append(row)
+    return rows
+
+
 def _normalize_options(payload: dict[str, Any]) -> dict[str, Any]:
     strict_raw = payload.get("strictRsi30", True)
     if isinstance(strict_raw, str):
@@ -313,12 +403,14 @@ def _normalize_options(payload: dict[str, Any]) -> dict[str, Any]:
         "strict_rsi_30": strict_rsi_30,
         "min_score": int(payload.get("minScore", DEFAULT_MIN_SCORE)),
         "sleep": float(payload.get("sleep", DEFAULT_SLEEP)),
+        "max_workers": int(payload.get("maxWorkers", DEFAULT_MAX_WORKERS)),
     }
 
 
 def run_scan(payload: dict[str, Any]) -> dict[str, Any]:
     options = _normalize_options(payload)
 
+    segment = payload.get("universeSegment") or payload.get("segment")
     raw_symbols = payload.get("symbols")
     if isinstance(raw_symbols, list) and raw_symbols:
         symbols = sorted(set(normalize_nse_symbol(s) for s in raw_symbols if str(s).strip()))
@@ -326,26 +418,25 @@ def run_scan(payload: dict[str, Any]) -> dict[str, Any]:
     else:
         limit = payload.get("symbolLimit")
         symbol_limit = int(limit) if limit is not None else None
-        symbols = default_universe_symbols(symbol_limit)
+        symbols = universe_symbols(str(segment) if segment else None, symbol_limit)
 
     if not symbols:
         raise ValueError("No symbols to scan.")
 
-    rows: list[dict[str, Any]] = []
-    for symbol in symbols:
-        row = scan_symbol(symbol, **{k: v for k, v in options.items() if k not in {"min_score", "sleep"}})
-        if row:
-            rows.append(row)
-        if options["sleep"] > 0:
-            time.sleep(options["sleep"])
+    rows = _scan_symbols(symbols, options)
 
     results = pd.DataFrame(rows)
     if results.empty:
         return {
             "scannedCount": len(symbols),
+            "universeSegment": (str(segment).strip().lower() if segment else DEFAULT_UNIVERSE_SEGMENT),
+            "minScore": options["min_score"],
+            "strictRsi30": options["strict_rsi_30"],
             "results": [],
             "finalSignals": [],
             "rankedCandidates": [],
+            "finalSignalCount": 0,
+            "rankedCandidateCount": 0,
         }
 
     sort_cols = [c for c in ["Final_Signal", "Score", "Distance_To_Breakout_pct"] if c in results.columns]
@@ -353,17 +444,19 @@ def run_scan(payload: dict[str, Any]) -> dict[str, Any]:
         ascending = [False if c in ["Final_Signal", "Score"] else True for c in sort_cols]
         results = results.sort_values(sort_cols, ascending=ascending)
 
-    records = results.to_dict(orient="records")
+    records = [_sanitize_record(record) for record in results.to_dict(orient="records")]
     final_signals = [r for r in records if r.get("Final_Signal") is True]
     ranked_candidates = [
         r
         for r in records
-        if r.get("Scan_Status") == "OK" and int(r.get("Score", 0)) >= options["min_score"]
+        if _passes_ranked_filter(r, options["min_score"], options["strict_rsi_30"])
     ]
 
     return {
         "scannedCount": len(symbols),
+        "universeSegment": (str(segment).strip().lower() if segment else DEFAULT_UNIVERSE_SEGMENT),
         "minScore": options["min_score"],
+        "strictRsi30": options["strict_rsi_30"],
         "results": records,
         "finalSignals": final_signals,
         "rankedCandidates": ranked_candidates,

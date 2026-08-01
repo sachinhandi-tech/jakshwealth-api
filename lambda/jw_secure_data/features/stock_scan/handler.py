@@ -21,9 +21,19 @@ def _handle_scan(event, trace: RequestTrace, authorizer: dict[str, Any], method:
     return trace.complete(responses.ok(body))
 
 
+def _query_param(event: dict, name: str) -> str | None:
+    params = (event or {}).get("queryStringParameters") or {}
+    value = params.get(name)
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
 def _handle_universe(event, trace: RequestTrace, authorizer: dict[str, Any], method: str) -> dict:
+    segment = _query_param(event, "segment")
     try:
-        body = service.universe_info()
+        body = service.universe_info(segment)
     except (FileNotFoundError, ValueError) as exc:
         return trace.complete(responses.bad_request(str(exc)))
     return trace.complete(responses.ok(body))
