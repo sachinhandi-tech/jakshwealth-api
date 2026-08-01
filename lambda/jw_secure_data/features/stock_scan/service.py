@@ -39,6 +39,10 @@ UNIVERSE_SEGMENTS: dict[str, dict[str, str]] = {
         "label": "Nifty Smallcap 250",
         "file": "nifty_smallcap250.csv",
     },
+    "custom": {
+        "label": "Custom watchlist",
+        "file": "",
+    },
 }
 DEFAULT_UNIVERSE_SEGMENT = "midcap"
 
@@ -89,6 +93,8 @@ def resolve_universe_csv(segment: str | None = None) -> Path:
     if key not in UNIVERSE_SEGMENTS:
         known = ", ".join(sorted(UNIVERSE_SEGMENTS))
         raise ValueError(f"Unknown universe segment '{segment}'. Expected one of: {known}")
+    if key == "custom":
+        raise ValueError("Custom universe uses symbols from the request body, not a CSV.")
     return DATA_DIR / UNIVERSE_SEGMENTS[key]["file"]
 
 
@@ -105,7 +111,18 @@ def default_universe_symbols(limit: int | None = None) -> list[str]:
 
 def universe_info(segment: str | None = None) -> dict[str, Any]:
     key = (segment or DEFAULT_UNIVERSE_SEGMENT).strip().lower()
+    if key not in UNIVERSE_SEGMENTS:
+        known = ", ".join(sorted(UNIVERSE_SEGMENTS))
+        raise ValueError(f"Unknown universe segment '{segment}'. Expected one of: {known}")
     meta = UNIVERSE_SEGMENTS[key]
+    if key == "custom":
+        return {
+            "segment": key,
+            "label": meta["label"],
+            "source": "user-provided symbols",
+            "symbolCount": 0,
+            "sampleSymbols": [],
+        }
     csv_path = resolve_universe_csv(key)
     symbols = universe_symbols(key)
     return {
@@ -415,7 +432,9 @@ def run_scan(payload: dict[str, Any]) -> dict[str, Any]:
     if isinstance(raw_symbols, list) and raw_symbols:
         symbols = sorted(set(normalize_nse_symbol(s) for s in raw_symbols if str(s).strip()))
         symbols = [s for s in symbols if s]
+        resolved_segment = "custom"
     else:
+        resolved_segment = (str(segment).strip().lower() if segment else DEFAULT_UNIVERSE_SEGMENT)
         limit = payload.get("symbolLimit")
         symbol_limit = int(limit) if limit is not None else None
         symbols = universe_symbols(str(segment) if segment else None, symbol_limit)
@@ -429,7 +448,7 @@ def run_scan(payload: dict[str, Any]) -> dict[str, Any]:
     if results.empty:
         return {
             "scannedCount": len(symbols),
-            "universeSegment": (str(segment).strip().lower() if segment else DEFAULT_UNIVERSE_SEGMENT),
+            "universeSegment": resolved_segment,
             "minScore": options["min_score"],
             "strictRsi30": options["strict_rsi_30"],
             "results": [],
@@ -454,7 +473,7 @@ def run_scan(payload: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "scannedCount": len(symbols),
-        "universeSegment": (str(segment).strip().lower() if segment else DEFAULT_UNIVERSE_SEGMENT),
+        "universeSegment": resolved_segment,
         "minScore": options["min_score"],
         "strictRsi30": options["strict_rsi_30"],
         "results": records,

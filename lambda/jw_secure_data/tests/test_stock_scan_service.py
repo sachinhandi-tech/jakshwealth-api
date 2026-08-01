@@ -17,6 +17,26 @@ def test_universe_info_smallcap():
     assert info["source"] == "nifty_smallcap250.csv"
 
 
+def test_universe_info_custom():
+    info = service.universe_info("custom")
+    assert info["segment"] == "custom"
+    assert info["symbolCount"] == 0
+    assert info["source"] == "user-provided symbols"
+
+
+def test_run_scan_custom_symbols_sets_segment():
+    payload = {
+        "symbols": ["RELIANCE", "TCS"],
+        "minScore": 80,
+        "strictRsi30": False,
+        "sleep": 0,
+        "maxWorkers": 2,
+    }
+    body = service.run_scan(payload)
+    assert body["universeSegment"] == "custom"
+    assert body["scannedCount"] == 2
+
+
 def test_ranked_filter_requires_score_and_strict_rsi():
     row = {
         "Scan_Status": "OK",
