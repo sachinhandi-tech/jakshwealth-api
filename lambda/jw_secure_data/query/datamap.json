@@ -1,0 +1,174 @@
+{
+  "version": "2",
+  "dialect": "databricks",
+  "catalog": "ssa_analytics",
+  "schema": "gold",
+  "description": "Self-Service Analytics datamap for AI-assisted querying. Logical table names are used in DSL; physical_table values are resolved before SQL compilation.",
+  "tables": {
+    "claims": {
+      "physical_table": "claim_fact",
+      "qualified_name": "ssa_analytics.gold.claim_fact",
+      "description": "Claim header facts with payment and adjudication status.",
+      "columns": {
+        "claim_id": {
+          "type": "string",
+          "description": "Unique claim identifier."
+        },
+        "member_id": {
+          "type": "string",
+          "description": "Foreign key to members.member_id."
+        },
+        "provider_id": {
+          "type": "string",
+          "description": "Foreign key to providers.provider_id."
+        },
+        "provider_group_id": {
+          "type": "string",
+          "description": "Foreign key to provider_groups.provider_group_id."
+        },
+        "claim_status": {
+          "type": "string",
+          "description": "Claim adjudication status (PAID, DENIED, PENDED)."
+        },
+        "service_date": {
+          "type": "date",
+          "description": "Date of service on the claim."
+        },
+        "paid_amount": {
+          "type": "decimal",
+          "description": "Total paid amount on the claim."
+        },
+        "allowed_amount": {
+          "type": "decimal",
+          "description": "Allowed amount before member cost share."
+        },
+        "designation": {
+          "type": "string",
+          "description": "Network designation (CCD, Tier 1, Non-CCD)."
+        }
+      }
+    },
+    "claim_lines": {
+      "physical_table": "claim_line_fact",
+      "qualified_name": "ssa_analytics.gold.claim_line_fact",
+      "description": "Service-line level claim detail used for utilization and spend reporting.",
+      "columns": {
+        "claim_line_id": {
+          "type": "string",
+          "description": "Unique claim line identifier."
+        },
+        "claim_id": {
+          "type": "string",
+          "description": "Foreign key to claims.claim_id."
+        },
+        "procedure_code": {
+          "type": "string",
+          "description": "CPT or HCPCS procedure code."
+        },
+        "line_paid_amount": {
+          "type": "decimal",
+          "description": "Paid amount at the claim line level."
+        },
+        "units": {
+          "type": "integer",
+          "description": "Number of service units on the line."
+        }
+      }
+    },
+    "members": {
+      "physical_table": "member_dim",
+      "qualified_name": "ssa_analytics.gold.member_dim",
+      "description": "Enrolled members and demographic attributes used for reporting.",
+      "columns": {
+        "member_id": {
+          "type": "string",
+          "description": "Unique member identifier."
+        },
+        "member_name": {
+          "type": "string",
+          "description": "Member display name."
+        },
+        "region": {
+          "type": "string",
+          "description": "Geographic region for the member."
+        },
+        "market": {
+          "type": "string",
+          "description": "CRR or commercial market segment."
+        },
+        "product": {
+          "type": "string",
+          "description": "Member product or line of business."
+        }
+      }
+    },
+    "providers": {
+      "physical_table": "provider_dim",
+      "qualified_name": "ssa_analytics.gold.provider_dim",
+      "description": "Rendering and billing providers associated with claims.",
+      "columns": {
+        "provider_id": {
+          "type": "string",
+          "description": "Unique provider identifier."
+        },
+        "provider_name": {
+          "type": "string",
+          "description": "Provider display name."
+        },
+        "specialty": {
+          "type": "string",
+          "description": "Primary provider specialty."
+        },
+        "network_flag": {
+          "type": "string",
+          "description": "Network participation flag (CCD, Non-CCD)."
+        }
+      }
+    },
+    "provider_groups": {
+      "physical_table": "provider_group_dim",
+      "qualified_name": "ssa_analytics.gold.provider_group_dim",
+      "description": "Provider groups used in proof point volume and CCD reporting.",
+      "columns": {
+        "provider_group_id": {
+          "type": "string",
+          "description": "Unique provider group identifier."
+        },
+        "provider_group_name": {
+          "type": "string",
+          "description": "Provider group display name."
+        },
+        "designation": {
+          "type": "string",
+          "description": "CCD or Tier designation for the group."
+        },
+        "region": {
+          "type": "string",
+          "description": "Geographic region for the provider group."
+        }
+      }
+    }
+  },
+  "relationships": [
+    {
+      "left": "claims.member_id",
+      "right": "members.member_id",
+      "description": "Claim belongs to a member."
+    },
+    {
+      "left": "claims.provider_id",
+      "right": "providers.provider_id",
+      "description": "Claim is associated with a provider."
+    },
+    {
+      "left": "claims.provider_group_id",
+      "right": "provider_groups.provider_group_id",
+      "description": "Claim is attributed to a provider group."
+    },
+    {
+      "left": "claim_lines.claim_id",
+      "right": "claims.claim_id",
+      "description": "Claim line belongs to a claim header."
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "lambda_name": "jw_app_config",
+  "full_path": "/jw-api/app-config",
+  "methods": ["GET", "OPTIONS"],
+  "disable_auth": ["GET", "OPTIONS"],
+  "internet": "true",
+  "description": "Public app metadata and feature flags",
+  "runtime": "python3.12",
+  "handler": "handler.handler",
+  "memory_size": "256",
+  "timeout": "30",
+  "ephemeral_memory": "512",
+  "layers": [],
+  "permissions": {
+    "USER": ["GET", "OPTIONS"]
+  },
+  "environmental_variables": {
+    "ENVIRONMENT": "dev",
+    "LOG_LEVEL": "INFO"
+  }
+}
