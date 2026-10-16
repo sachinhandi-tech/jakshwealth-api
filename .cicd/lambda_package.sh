@@ -76,6 +76,19 @@ tf-genupload() {
         cp certs/corp-ca.pem package/certs/corp-ca.pem
     fi
 
+    # Extra source trees that live outside this Lambda directory, such as kite_app.
+    if [ -f include_paths.txt ]; then
+        while IFS= read -r rel || [ -n "$rel" ]; do
+            case "$rel" in
+                ""|\#*) continue ;;
+            esac
+            base=$(basename "$rel")
+            rm -rf "package/${base}"
+            cp -R "$rel" "package/${base}"
+            rm -rf "package/${base}/__pycache__" "package/${base}/.pytest_cache"
+        done < include_paths.txt
+    fi
+
     install_lambda_deps
 
     cd package || exit 1

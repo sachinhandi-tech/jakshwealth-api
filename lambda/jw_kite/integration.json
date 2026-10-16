@@ -1,0 +1,24 @@
+{
+  "lambda_name": "jw_kite",
+  "full_path": "/jw-api/kite",
+  "allow_subpath": true,
+  "methods": ["GET", "POST", "OPTIONS"],
+  "disable_auth": ["GET", "POST", "OPTIONS"],
+  "internet": "true",
+  "description": "Zerodha Kite desk and Univest notification bridge",
+  "runtime": "python3.12",
+  "handler": "handler.handler",
+  "memory_size": "512",
+  "timeout": "120",
+  "ephemeral_memory": "512",
+  "layers": [],
+  "permissions": {
+    "USER": ["GET", "POST", "OPTIONS"]
+  },
+  "environmental_variables": {
+    "ENVIRONMENT": "dev",
+    "LOG_LEVEL": "INFO",
+    "KITE_SESSION_PATH": "/tmp/kite-session.json",
+    "UNIVEST_INGEST_SECRET": "choose-a-long-secret"
+  }
+}

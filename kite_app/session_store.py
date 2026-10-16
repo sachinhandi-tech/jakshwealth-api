@@ -7,7 +7,11 @@ import os
 from pathlib import Path
 
 # Outside the Python package tree so uvicorn --reload does not restart when this file is written.
-DEFAULT_SESSION_PATH = Path(__file__).resolve().parent.parent / ".kite" / "session.json"
+# Lambda sets KITE_SESSION_PATH to /tmp because the deployment package is read-only.
+DEFAULT_SESSION_PATH = Path(
+    os.environ.get("KITE_SESSION_PATH")
+    or (Path(__file__).resolve().parent.parent / ".kite" / "session.json")
+)
 
 SESSION_FIELDS = ("api_key", "access_token", "user_id", "user_name", "saved_at")
 
