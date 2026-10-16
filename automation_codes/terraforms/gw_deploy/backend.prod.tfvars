@@ -1,5 +1,0 @@
-bucket = "jakshwealth-artifacts-prod"
-key    = "prod/jw-api/stage/terraform/terraform.tfstate"
-region = "ap-south-2"
-profile = "jakshwealth"
-dynamodb_table = "terraform-state-lock"

@@ -9,6 +9,7 @@ aws.local.env
 .personal-build.properties
 feature_flags.local.json
 .env
+.kite/
 .pytest_cache/
 .coverage
 htmlcov/
