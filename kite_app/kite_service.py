@@ -154,6 +154,29 @@ class KiteService:
         trend_window: int = 0,
         scan_mode: str = "crossover",
     ) -> dict:
+        kite = self._require_client()
+        try:
+            return scan_nifty100(kite, **self.scan_params(
+                short_window, long_window, lookback_days, max_stocks,
+                ma_type, short_type, long_type, trend_window, scan_mode,
+            ))
+        except KiteException as exc:
+            if isinstance(exc, TokenException):
+                self._drop_expired_session(exc)
+            raise KiteAuthError(_safe_kite_message(exc)) from exc
+
+    def scan_params(
+        self,
+        short_window: int,
+        long_window: int,
+        lookback_days: int,
+        max_stocks: int,
+        ma_type: str = "sma",
+        short_type: str | None = None,
+        long_type: str | None = None,
+        trend_window: int = 0,
+        scan_mode: str = "crossover",
+    ) -> dict:
         fast_type = short_type or ma_type
         slow_type = long_type or ma_type
         if fast_type not in {"sma", "ema", "wma"} or slow_type not in {"sma", "ema", "wma"}:
@@ -171,24 +194,17 @@ class KiteService:
             raise SignalScanError("Lookback days must be between 1 and 400.")
         if not 1 <= max_stocks <= 100:
             raise SignalScanError("Max stocks must be between 1 and 100.")
-        kite = self._require_client()
-        try:
-            return scan_nifty100(
-                kite,
-                short_window,
-                long_window,
-                lookback_days,
-                max_stocks,
-                ma_type,
-                fast_type,
-                slow_type,
-                trend_window,
-                scan_mode,
-            )
-        except KiteException as exc:
-            if isinstance(exc, TokenException):
-                self._drop_expired_session(exc)
-            raise KiteAuthError(_safe_kite_message(exc)) from exc
+        return {
+            "short_window": short_window,
+            "long_window": long_window,
+            "lookback_days": lookback_days,
+            "max_stocks": max_stocks,
+            "ma_type": ma_type,
+            "short_type": fast_type,
+            "long_type": slow_type,
+            "trend_window": trend_window,
+            "scan_mode": scan_mode,
+        }
 
     def _require_client(self) -> KiteConnect:
         record = self.store.load()

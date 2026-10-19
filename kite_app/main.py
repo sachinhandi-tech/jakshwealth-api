@@ -7,11 +7,13 @@ from typing import Literal
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from kite_app.auth_router import router as zerodha_auth_router
 from kite_app.inbox import recent_signals, remember
 from kite_app.kite_service import KiteAuthError, KiteService
+from kite_app.scan_jobs import enqueue_scan, read_scan
 from kite_app.signals import SignalScanError
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -150,10 +152,13 @@ def quotes() -> list[dict]:
         raise _auth_error(exc) from exc
 
 
-@app.post("/api/kite/signals", response_model=SignalResponse)
-def signals(body: SignalRequest) -> dict:
+@app.post("/api/kite/signals")
+def signals(body: SignalRequest) -> JSONResponse:
     try:
-        return service.scan_signals(
+        record = service.store.load()
+        if record is None:
+            raise KiteAuthError("Log in with a fresh request token. No saved session was found.")
+        params = service.scan_params(
             body.short_window,
             body.long_window,
             body.lookback_days,
@@ -164,10 +169,20 @@ def signals(body: SignalRequest) -> dict:
             body.trend_window,
             body.scan_mode,
         )
+        job_id = enqueue_scan(record, params)
     except SignalScanError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except KiteAuthError as exc:
         raise _auth_error(exc) from exc
+    return JSONResponse(status_code=202, content={"job_id": job_id, "status": "running"})
+
+
+@app.get("/api/kite/signals/{job_id}")
+def signal_job(job_id: str) -> dict:
+    job = read_scan(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="That scan was not found.")
+    return job
 
 
 @app.post("/api/kite/algo/signal")

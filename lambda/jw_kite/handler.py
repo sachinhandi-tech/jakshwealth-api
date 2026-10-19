@@ -19,4 +19,9 @@ _asgi = Mangum(app, lifespan="off")
 
 
 def handler(event, context):
+    if isinstance(event, dict) and event.get("source") == "kite-scan":
+        from kite_app.scan_jobs import run_scan_job
+
+        run_scan_job(str(event.get("job_id") or ""))
+        return {"ok": True}
     return _asgi(normalize_event(event or {}), context)

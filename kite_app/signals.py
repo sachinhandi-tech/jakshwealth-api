@@ -14,6 +14,8 @@ NIFTY100_CSV_URL = "https://www.niftyindices.com/IndexConstituent/ind_nifty100li
 NIFTY100_CSV_FALLBACK = "https://nsearchives.nseindia.com/content/indices/ind_nifty100list.csv"
 CACHE_SECONDS = 6 * 60 * 60
 REQUEST_GAP_SECONDS = 0.35
+# API Gateway closes the HTTP request at about 29 seconds. Stop before that.
+SCAN_BUDGET_SECONDS = 22
 
 _constituent_cache: tuple[float, list[dict]] | None = None
 _token_cache: tuple[float, dict[str, int]] | None = None
@@ -199,7 +201,9 @@ def scan_nifty100(
     long_type: str | None = None,
     trend_window: int = 0,
     scan_mode: str = "crossover",
+    budget_seconds: float | None = None,
 ) -> dict:
+    deadline = time.monotonic() + (SCAN_BUDGET_SECONDS if budget_seconds is None else budget_seconds)
     constituents = load_nifty100()
     tokens = nse_equity_tokens(kite)
     end = datetime.now()
@@ -211,8 +215,13 @@ def scan_nifty100(
     scanned = 0
 
     for offset, constituent in enumerate(constituents):
+        if time.monotonic() >= deadline:
+            break
         if offset:
-            time.sleep(REQUEST_GAP_SECONDS)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(REQUEST_GAP_SECONDS, remaining))
         token = tokens.get(constituent["ticker"])
         if token is None:
             skipped += 1
@@ -273,7 +282,7 @@ def load_nifty100() -> list[dict]:
             response = requests.get(
                 url,
                 headers={"User-Agent": "Mozilla/5.0", "Accept": "text/csv,*/*"},
-                timeout=30,
+                timeout=8,
             )
             response.raise_for_status()
             rows = parse_nifty100_csv(response.text)

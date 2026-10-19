@@ -1,3 +1,4 @@
+import time
 from datetime import date, timedelta
 
 from kite_app.signals import (
@@ -5,6 +6,7 @@ from kite_app.signals import (
     latest_crossover,
     latest_price_cross,
     parse_nifty100_csv,
+    scan_nifty100,
     simple_moving_average,
     weighted_moving_average,
 )
@@ -102,3 +104,58 @@ def test_parse_nifty100_csv_reads_symbol_and_company():
     rows = parse_nifty100_csv(text)
     assert rows[0] == {"ticker": "SYM0", "company": "Company 0"}
     assert len(rows) == 60
+
+
+def test_scan_job_result_omits_the_access_token(monkeypatch):
+    from kite_app.scan_jobs import enqueue_scan, read_scan, run_scan_job
+
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("FERNET_KEY", raising=False)
+    monkeypatch.delenv("AWS_LAMBDA_FUNCTION_NAME", raising=False)
+    monkeypatch.setattr("kite_app.scan_jobs._start", lambda job_id: None)
+    monkeypatch.setattr(
+        "kite_app.scan_jobs.scan_nifty100",
+        lambda kite, **kwargs: {"signals": [], "scanned": 1, "universe": 1, "skipped": 0},
+    )
+    job_id = enqueue_scan(
+        {"api_key": "key", "access_token": "secret-token"},
+        {
+            "short_window": 2,
+            "long_window": 4,
+            "lookback_days": 5,
+            "max_stocks": 10,
+            "ma_type": "sma",
+            "short_type": "sma",
+            "long_type": "sma",
+            "trend_window": 0,
+            "scan_mode": "crossover",
+        },
+    )
+    run_scan_job(job_id)
+    body = read_scan(job_id)
+    assert body is not None
+    assert body["status"] == "done"
+    assert "secret-token" not in str(body)
+
+
+def test_scan_returns_before_the_gateway_timeout(monkeypatch):
+    import kite_app.signals as signals
+
+    monkeypatch.setattr(signals, "SCAN_BUDGET_SECONDS", 0.45)
+    monkeypatch.setattr(
+        signals,
+        "load_nifty100",
+        lambda: [{"ticker": f"S{index}", "company": "Company"} for index in range(40)],
+    )
+    monkeypatch.setattr(signals, "nse_equity_tokens", lambda kite: {f"S{index}": index for index in range(40)})
+
+    class SlowKite:
+        def historical_data(self, *args, **kwargs):
+            time.sleep(0.05)
+            return []
+
+    started = time.monotonic()
+    result = scan_nifty100(SlowKite(), 5, 10, 5, 10)
+    assert time.monotonic() - started < 2
+    assert 0 < result["scanned"] < 40
+    assert result["universe"] == 40

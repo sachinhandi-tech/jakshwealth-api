@@ -27,6 +27,20 @@ class User(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
 
+class SignalScanJob(Base):
+    """One Nifty 100 scan started by the desk and finished after the HTTP request returns."""
+
+    __tablename__ = "signal_scan_jobs"
+
+    job_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    request_json: Mapped[str] = mapped_column(Text, nullable=False)
+    credential_blob: Mapped[str] = mapped_column(Text, nullable=False)
+    result_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class ZerodhaSession(Base):
     """One Kite access token per subscriber, encrypted, valid for a single IST date."""
 
