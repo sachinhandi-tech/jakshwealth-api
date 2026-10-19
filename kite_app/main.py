@@ -197,7 +197,11 @@ def _ingest_allowed(request: Request, secret: str | None) -> None:
 
 @app.post("/api/univest/notification")
 async def univest_notification(request: Request) -> dict:
-    _ingest_allowed(request, request.headers.get("x-univest-secret"))
+    content_type = request.headers.get("content-type", "")
+    supplied = request.headers.get("x-univest-secret")
+    # The desk posts JSON. The phone posts plain text and must send the secret.
+    if "json" not in content_type.lower() or supplied:
+        _ingest_allowed(request, supplied)
     raw_body = (await request.body()).decode("utf-8", errors="replace").strip()
     if len(raw_body) > 16000:
         raw_body = raw_body[:16000]
