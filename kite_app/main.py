@@ -2,19 +2,25 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+from kiteconnect.exceptions import TokenException
+
 from kite_app.auth_router import router as zerodha_auth_router
+from kite_app.gtt_orders import GttRejected, gtt_state, live_gtt
 from kite_app.inbox import recent_signals, remember
 from kite_app.kite_service import KiteAuthError, KiteService
 from kite_app.scan_jobs import enqueue_scan, read_scan
+from kite_app.scanner_data import build_scanner_payload, ohlc_snapshot
 from kite_app.signals import SignalScanError
+from kite_app.ticks import hub
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger("kite_app")
@@ -108,6 +114,23 @@ class QuoteRow(BaseModel):
     volume: int | None = None
 
 
+class GttOrderIn(BaseModel):
+    symbol: str
+    quantity: int = 1
+    buy_price: float | None = None
+    stoploss: float | None = None
+    last_price: float | None = None
+
+
+class GttStateRequest(BaseModel):
+    orders: list[GttOrderIn] = Field(default_factory=list)
+
+
+class LiveGttRequest(BaseModel):
+    confirm_live: bool | None = None
+    orders: list[GttOrderIn] = Field(default_factory=list)
+
+
 def _auth_error(exc: KiteAuthError) -> HTTPException:
     missing = "log in" in str(exc).lower() or "no saved session" in str(exc).lower()
     return HTTPException(status_code=401 if missing else 400, detail=str(exc))
@@ -196,5 +219,102 @@ def algo_signal(body: AlgoSignal) -> dict:
 @app.get("/api/kite/algo/signals")
 def algo_signals() -> dict:
     return {"signals": recent_signals()}
+
+
+@app.get("/api/scanner-data")
+def scanner_data() -> dict:
+    try:
+        kite = service._require_client()
+        return build_scanner_payload(kite)
+    except SignalScanError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except TokenException as exc:
+        service._drop_expired_session(exc)
+        raise HTTPException(status_code=401, detail="Log in with a fresh request token. No saved session was found.") from exc
+    except KiteAuthError as exc:
+        raise _auth_error(exc) from exc
+
+
+@app.get("/api/ohlc")
+def ohlc(symbols: str = "") -> dict:
+    try:
+        kite = service._require_client()
+        return ohlc_snapshot(kite, symbols.split(","))
+    except SignalScanError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except TokenException as exc:
+        service._drop_expired_session(exc)
+        raise HTTPException(status_code=401, detail="Log in with a fresh request token. No saved session was found.") from exc
+    except KiteAuthError as exc:
+        raise _auth_error(exc) from exc
+
+
+@app.websocket("/ws/ticks")
+async def ticks(websocket: WebSocket, tokens: str = "", mode: str = "full") -> None:
+    await websocket.accept()
+    if mode != "full":
+        await websocket.close(code=1008)
+        return
+    record = service.store.load()
+    subscribed = set()
+    for part in tokens.split(","):
+        part = part.strip()
+        if part.isdigit():
+            subscribed.add(int(part))
+    if record is None or not subscribed:
+        await websocket.close(code=1008)
+        return
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue = asyncio.Queue()
+
+    def publish(token: int, price: float) -> None:
+        loop.call_soon_threadsafe(queue.put_nowait, {"instrument_token": token, "last_price": price})
+
+    listener_id = None
+    try:
+        listener_id = hub.add(str(record["api_key"]), str(record["access_token"]), subscribed, publish)
+        while True:
+            await websocket.send_json(await queue.get())
+    except WebSocketDisconnect:
+        return
+    except Exception:
+        await websocket.close(code=1011)
+    finally:
+        if listener_id is not None:
+            hub.remove(listener_id)
+
+
+def _gtt_orders(orders: list[GttOrderIn]) -> list[dict]:
+    return [order.model_dump() for order in orders]
+
+
+@app.post("/api/algo-orders/gtt-state")
+def algo_gtt_state(body: GttStateRequest) -> dict:
+    try:
+        kite = service._require_client()
+        return {"orders": gtt_state(kite, _gtt_orders(body.orders))}
+    except SignalScanError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except TokenException as exc:
+        service._drop_expired_session(exc)
+        raise HTTPException(status_code=401, detail="Log in with a fresh request token. No saved session was found.") from exc
+    except KiteAuthError as exc:
+        raise _auth_error(exc) from exc
+
+
+@app.post("/api/algo-orders/live-gtt")
+def algo_live_gtt(body: LiveGttRequest) -> dict:
+    try:
+        kite = service._require_client()
+        return {"orders": live_gtt(kite, _gtt_orders(body.orders), body.confirm_live)}
+    except GttRejected as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except SignalScanError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except TokenException as exc:
+        service._drop_expired_session(exc)
+        raise HTTPException(status_code=401, detail="Log in with a fresh request token. No saved session was found.") from exc
+    except KiteAuthError as exc:
+        raise _auth_error(exc) from exc
 
 
