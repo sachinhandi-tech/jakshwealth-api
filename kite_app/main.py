@@ -12,12 +12,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 
 from kite_app.auth_router import router as zerodha_auth_router
+from kite_app.advisory import parse_alerts
+from kite_app.broker_orders import execute_univest_orders
 from kite_app.kite_service import KiteAuthError, KiteService
 from kite_app.signals import SignalScanError
 from kite_app.univest import (
     UnivestParseError,
     dispatch,
-    parse_univest,
     recent_attempts,
     recent_signals,
     record_attempt,
@@ -198,8 +199,8 @@ def _ingest_allowed(request: Request, secret: str | None) -> None:
 async def univest_notification(request: Request) -> dict:
     _ingest_allowed(request, request.headers.get("x-univest-secret"))
     raw_body = (await request.body()).decode("utf-8", errors="replace").strip()
-    if len(raw_body) > 4000:
-        raw_body = raw_body[:4000]
+    if len(raw_body) > 16000:
+        raw_body = raw_body[:16000]
     title = ""
     text = raw_body
     if "json" in request.headers.get("content-type", "").lower():
@@ -217,7 +218,7 @@ async def univest_notification(request: Request) -> dict:
         record_attempt("", None, "Empty notification.")
         return {"accepted": False, "error": "Empty notification.", "payload": None, "dispatched": False}
     try:
-        payload = parse_univest(raw)
+        signals = parse_alerts(raw)
     except UnivestParseError as exc:
         logger.warning("Ignored Univest notification: %s | text=%s", exc, raw[:180])
         record_attempt(raw, None, str(exc))
@@ -231,6 +232,33 @@ async def univest_notification(request: Request) -> dict:
             "payload": None,
             "dispatched": False,
         }
+    orders: list[dict] = []
+    errors: list[str] = []
+    try:
+        kite = service._require_client()
+    except KiteAuthError as exc:
+        kite = None
+        errors.append(str(exc))
+    for signal in signals:
+        if kite is None:
+            signal["order"] = {"placed": False, "orders": [], "error": errors[0]}
+            continue
+        result = execute_univest_orders(kite, signal)
+        signal["order"] = result
+        orders.extend(result.get("orders") or [])
+        if result.get("error"):
+            errors.append(str(result["error"]))
+    payload = signals[0] if len(signals) == 1 else {
+        "source": "univest",
+        "symbol": ", ".join(str(item.get("symbol") or "") for item in signals),
+        "transaction_type": signals[0].get("transaction_type"),
+        "calls": signals,
+    }
+    payload["order"] = {
+        "placed": any(bool(item.get("order", {}).get("placed")) for item in signals),
+        "orders": orders,
+        "error": "; ".join(dict.fromkeys(errors)) or None,
+    }
     record_attempt(raw, payload, None)
     delivery = dispatch(payload)
     if not delivery.get("dispatched"):

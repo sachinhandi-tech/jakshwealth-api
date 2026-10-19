@@ -1,6 +1,6 @@
 # Univest notification bridge
 
-This service turns a Univest push notification into the JSON your algo endpoint already accepts. It does not place a Zerodha order. The parsed signal is posted to `UNIVEST_ALGO_WEBHOOK_URL`, which defaults to `http://127.0.0.1:8010/api/kite/algo/signal`.
+This service reads a Univest push notification and, when the Kite desk is logged in, places the matching Zerodha limit order.
 
 ```json
 {
@@ -42,7 +42,7 @@ Without `UNIVEST_INGEST_SECRET`, only this computer can submit alerts. A wrong o
 4. Trigger: **Device Events → Notification → Notification Received**. Choose the Univest application.
 5. Action: **Connectivity → HTTP Request**.
    - Method: `POST`
-   - URL: `http://192.168.x.x:8010/api/univest/notification`
+   - URL: `https://4jadhr4hk8.execute-api.ap-south-2.amazonaws.com/dev/jw-api/kite/api/univest/notification`
    - Content type: `text/plain`
    - Header: `X-Univest-Secret: choose-a-long-secret`
    - Body (MacroDroid magic text; `{not_text}` is not a real field):
@@ -62,7 +62,7 @@ Without `UNIVEST_INGEST_SECRET`, only this computer can submit alerts. A wrong o
 1. Profile: **Event → UI → Notification**. Owner Application: Univest.
 2. Task: **Net → HTTP Request**.
    - Method: `POST`
-   - URL: the same LAN URL as above
+   - URL: `https://4jadhr4hk8.execute-api.ap-south-2.amazonaws.com/dev/jw-api/kite/api/univest/notification`
    - Headers: `X-Univest-Secret: choose-a-long-secret`
    - Body: `{"title":"%evtprm2","text":"%evtprm3"}`
 3. Tasker notification text is `%evtprm3` and the title is `%evtprm2`.
@@ -93,6 +93,10 @@ These shapes all parse:
 - Partial booking: `Book 50% profit in TATAMOTORS at 1020. Trail SL to cost.` This becomes `transaction_type: SELL` and `signal_kind: partial_book`
 - Ticker in parentheses or after `NSE:`
 
-Text with no action, no ticker, or no price is rejected. The server logs a warning and keeps running.
+The advisory cards use the same layout for every symbol:
 
-Point `UNIVEST_ALGO_WEBHOOK_URL` at another engine when you are ready. Until that engine places an order itself, this bridge only records the signal.
+- Futures: `RELIANCE 19 NOV FUT`, `Buy` or `Sell`, price, optional range, stoploss, target, `Lot size`
+- Options: underlying name, then each leg `Buy 27 OCT 22750 PE 1 86.25`, then `Lot size`
+- Stocks: `Stock - Long Term`, `Stock - Med. Term`, or `Stock - Short Term`, then the symbol, `Buy` or `Sell`, and the price
+
+Text with no action, no ticker, or no price is rejected. The server logs a warning and keeps running. A logged-in Kite session is required before an order is sent.
