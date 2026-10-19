@@ -11,6 +11,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 
+from kite_app.auth_router import router as zerodha_auth_router
 from kite_app.kite_service import KiteAuthError, KiteService
 from kite_app.signals import SignalScanError
 from kite_app.univest import (
@@ -27,6 +28,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 logger = logging.getLogger("kite_app.univest")
 
 app = FastAPI(title="JakshWealth Kite", version="1.0.0")
+app.include_router(zerodha_auth_router)
 service = KiteService()
 
 app.add_middleware(
