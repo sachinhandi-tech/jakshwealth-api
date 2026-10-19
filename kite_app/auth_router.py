@@ -15,7 +15,7 @@ from fastapi.responses import RedirectResponse
 from kiteconnect import KiteConnect
 from kiteconnect.exceptions import KiteException
 
-from kite_app.models import User, get_sessionmaker
+from kite_app.models import User, get_sessionmaker, load_platform_config
 from kite_app.session_manager import upsert_zerodha_session
 
 logger = logging.getLogger("kite_app.auth")
@@ -48,6 +48,7 @@ def zerodha_callback(
     if status == "error" or not request_token:
         raise HTTPException(status_code=400, detail="Zerodha login was not completed")
     platform_user_id = _read_state(state)
+    load_platform_config()
     api_secret = os.environ.get("KITE_API_SECRET", "").strip()
     if not api_secret:
         raise HTTPException(status_code=503, detail="Platform Kite app is not configured")
@@ -76,6 +77,7 @@ def zerodha_callback(
 
 
 def _api_key() -> str:
+    load_platform_config()
     api_key = os.environ.get("KITE_API_KEY", "").strip()
     if not api_key:
         raise HTTPException(status_code=503, detail="Platform Kite app is not configured")

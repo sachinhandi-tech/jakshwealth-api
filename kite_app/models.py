@@ -43,8 +43,10 @@ class ZerodhaSession(Base):
 
 
 def load_platform_config() -> None:
-    """Fill database and encryption settings from Secrets Manager when they are not already set."""
-    if os.environ.get("DATABASE_URL", "").strip() and os.environ.get("FERNET_KEY", "").strip():
+    """Fill database, encryption, and Kite app settings from Secrets Manager when they are not already set."""
+    needs_db = not os.environ.get("DATABASE_URL", "").strip() or not os.environ.get("FERNET_KEY", "").strip()
+    needs_kite = not os.environ.get("KITE_API_KEY", "").strip() or not os.environ.get("KITE_API_SECRET", "").strip()
+    if not needs_db and not needs_kite:
         return
     secret_id = os.environ.get("KITE_DB_SECRET_ID", "").strip()
     if not secret_id:

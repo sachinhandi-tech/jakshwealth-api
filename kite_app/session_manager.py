@@ -12,7 +12,7 @@ from kiteconnect import KiteConnect
 from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
-from kite_app.models import User, ZerodhaSession, get_sessionmaker
+from kite_app.models import User, ZerodhaSession, get_sessionmaker, load_platform_config
 
 _IST = ZoneInfo("Asia/Kolkata")
 
@@ -103,6 +103,7 @@ def _fernet() -> Fernet:
 
 
 def _platform_api_key() -> str:
+    load_platform_config()
     api_key = os.environ.get("KITE_API_KEY", "").strip()
     if not api_key:
         raise SessionExpiredException("platform kite api key is not configured")
