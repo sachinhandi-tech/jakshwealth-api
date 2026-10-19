@@ -197,25 +197,23 @@ def _ingest_allowed(request: Request, secret: str | None) -> None:
 
 @app.post("/api/univest/notification")
 async def univest_notification(request: Request) -> dict:
-    content_type = request.headers.get("content-type", "")
-    supplied = request.headers.get("x-univest-secret")
-    # The desk posts JSON. The phone posts plain text and must send the secret.
-    if "json" not in content_type.lower() or supplied:
-        _ingest_allowed(request, supplied)
     raw_body = (await request.body()).decode("utf-8", errors="replace").strip()
     if len(raw_body) > 16000:
         raw_body = raw_body[:16000]
     title = ""
     text = raw_body
-    if "json" in request.headers.get("content-type", "").lower():
-        try:
-            data = json.loads(raw_body)
-        except json.JSONDecodeError:
-            logger.warning("Univest body was not valid JSON; parsing the raw text")
-        else:
-            if isinstance(data, dict):
-                title = str(data.get("title") or "")
-                text = str(data.get("text") or "")
+    desk_paste = False
+    try:
+        data = json.loads(raw_body)
+    except json.JSONDecodeError:
+        data = None
+    if isinstance(data, dict) and "text" in data:
+        desk_paste = True
+        title = str(data.get("title") or "")
+        text = str(data.get("text") or "")
+    # MacroDroid sends plain text and must include the shared secret.
+    if not desk_paste:
+        _ingest_allowed(request, request.headers.get("x-univest-secret"))
     raw = "\n".join(part.strip() for part in (title, text) if part and part.strip())
     if not raw:
         logger.warning("Ignored Univest notification: empty body")
