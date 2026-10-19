@@ -19,6 +19,7 @@
     "ENVIRONMENT": "dev",
     "LOG_LEVEL": "INFO",
     "KITE_SESSION_PATH": "/tmp/kite-session.json",
+    "KITE_DB_SECRET_ID": "jakshwealth/dev/postgres",
     "UNIVEST_INGEST_SECRET": "choose-a-long-secret"
   }
 }
