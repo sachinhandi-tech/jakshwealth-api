@@ -5,7 +5,7 @@
   "methods": ["GET", "POST", "OPTIONS"],
   "disable_auth": ["GET", "POST", "OPTIONS"],
   "internet": "true",
-  "description": "Zerodha Kite desk and Univest notification bridge",
+  "description": "Zerodha Kite desk",
   "runtime": "python3.12",
   "handler": "handler.handler",
   "memory_size": "512",
@@ -19,7 +19,6 @@
     "ENVIRONMENT": "dev",
     "LOG_LEVEL": "INFO",
     "KITE_SESSION_PATH": "/tmp/kite-session.json",
-    "KITE_DB_SECRET_ID": "jakshwealth/dev/postgres",
-    "UNIVEST_INGEST_SECRET": "choose-a-long-secret"
+    "KITE_DB_SECRET_ID": "jakshwealth/dev/postgres"
   }
 }

@@ -34,7 +34,7 @@ Open http://localhost:4200/kite/login
 3. After Zerodha redirects, copy the `request_token` from the URL (or paste the whole URL).
 4. Enter the API key, API secret, and request token, then choose Login.
 
-The dashboard User tab shows your name, user ID, products, and exchanges. Market shows live NSE quotes. Signals scans the official Nifty 100 list for SMA, EMA, or WMA crossovers on daily Kite candles. Univest push alerts are parsed by `kite_app/univest.py`. Phone setup is in [UNIVEST.md](UNIVEST.md).
+The dashboard User tab shows your name, user ID, products, and exchanges. Market shows live NSE quotes. Signals scans the official Nifty 100 list for SMA, EMA, or WMA crossovers on daily Kite candles.
 
 ## Customize
 

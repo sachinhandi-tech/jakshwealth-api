@@ -2,31 +2,20 @@
 
 from __future__ import annotations
 
-import json
 import logging
-import os
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 
 from kite_app.auth_router import router as zerodha_auth_router
-from kite_app.advisory import parse_alerts
-from kite_app.broker_orders import execute_univest_orders
+from kite_app.inbox import recent_signals, remember
 from kite_app.kite_service import KiteAuthError, KiteService
 from kite_app.signals import SignalScanError
-from kite_app.univest import (
-    UnivestParseError,
-    dispatch,
-    recent_attempts,
-    recent_signals,
-    record_attempt,
-    remember,
-)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
-logger = logging.getLogger("kite_app.univest")
+logger = logging.getLogger("kite_app")
 
 app = FastAPI(title="JakshWealth Kite", version="1.0.0")
 app.include_router(zerodha_auth_router)
@@ -106,7 +95,7 @@ class AlgoSignal(BaseModel):
     entry_price: float
     stop_loss: float | None = None
     target: float | None = None
-    source: str = "univest"
+    source: str = "algo"
 
 
 class QuoteRow(BaseModel):
@@ -181,98 +170,6 @@ def signals(body: SignalRequest) -> dict:
         raise _auth_error(exc) from exc
 
 
-def _ingest_allowed(request: Request, secret: str | None) -> None:
-    expected = os.environ.get("UNIVEST_INGEST_SECRET", "")
-    host = request.client.host if request.client else ""
-    if host in {"127.0.0.1", "::1"}:
-        return
-    if not expected:
-        raise HTTPException(
-            status_code=403,
-            detail="Set UNIVEST_INGEST_SECRET before accepting notifications from a phone.",
-        )
-    if secret != expected:
-        raise HTTPException(status_code=401, detail="Invalid Univest ingest secret.")
-
-
-@app.post("/api/univest/notification")
-async def univest_notification(request: Request) -> dict:
-    raw_body = (await request.body()).decode("utf-8", errors="replace").strip()
-    if len(raw_body) > 16000:
-        raw_body = raw_body[:16000]
-    title = ""
-    text = raw_body
-    desk_paste = False
-    try:
-        data = json.loads(raw_body)
-    except json.JSONDecodeError:
-        data = None
-    if isinstance(data, dict) and "text" in data:
-        desk_paste = True
-        title = str(data.get("title") or "")
-        text = str(data.get("text") or "")
-    # MacroDroid sends plain text and must include the shared secret.
-    if not desk_paste:
-        _ingest_allowed(request, request.headers.get("x-univest-secret"))
-    raw = "\n".join(part.strip() for part in (title, text) if part and part.strip())
-    if not raw:
-        logger.warning("Ignored Univest notification: empty body")
-        record_attempt("", None, "Empty notification.")
-        return {"accepted": False, "error": "Empty notification.", "payload": None, "dispatched": False}
-    try:
-        signals = parse_alerts(raw)
-    except UnivestParseError as exc:
-        logger.warning("Ignored Univest notification: %s | text=%s", exc, raw[:180])
-        record_attempt(raw, None, str(exc))
-        return {"accepted": False, "error": str(exc), "payload": None, "dispatched": False}
-    except Exception:
-        logger.exception("Univest parser failed")
-        record_attempt(raw, None, "The notification could not be parsed.")
-        return {
-            "accepted": False,
-            "error": "The notification could not be parsed.",
-            "payload": None,
-            "dispatched": False,
-        }
-    orders: list[dict] = []
-    errors: list[str] = []
-    try:
-        kite = service._require_client()
-    except KiteAuthError as exc:
-        kite = None
-        errors.append(str(exc))
-    for signal in signals:
-        if kite is None:
-            signal["order"] = {"placed": False, "orders": [], "error": errors[0]}
-            continue
-        result = execute_univest_orders(kite, signal)
-        signal["order"] = result
-        orders.extend(result.get("orders") or [])
-        if result.get("error"):
-            errors.append(str(result["error"]))
-    payload = signals[0] if len(signals) == 1 else {
-        "source": "univest",
-        "symbol": ", ".join(str(item.get("symbol") or "") for item in signals),
-        "transaction_type": signals[0].get("transaction_type"),
-        "calls": signals,
-    }
-    payload["order"] = {
-        "placed": any(bool(item.get("order", {}).get("placed")) for item in signals),
-        "orders": orders,
-        "error": "; ".join(dict.fromkeys(errors)) or None,
-    }
-    record_attempt(raw, payload, None)
-    delivery = dispatch(payload)
-    if not delivery.get("dispatched"):
-        remember(payload)
-    return {
-        "accepted": True,
-        "payload": payload,
-        "dispatched": bool(delivery.get("dispatched")),
-        "dispatch_error": delivery.get("error"),
-    }
-
-
 @app.post("/api/kite/algo/signal")
 def algo_signal(body: AlgoSignal) -> dict:
     payload = body.model_dump()
@@ -283,6 +180,6 @@ def algo_signal(body: AlgoSignal) -> dict:
 
 @app.get("/api/kite/algo/signals")
 def algo_signals() -> dict:
-    return {"signals": recent_signals(), "attempts": recent_attempts()}
+    return {"signals": recent_signals()}
 
 
