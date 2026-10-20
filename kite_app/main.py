@@ -163,7 +163,11 @@ def _auth_error(exc: KiteAuthError) -> HTTPException:
 def subscribers() -> dict:
     from kite_app.identity_store import list_active_users
 
-    return {"subscribers": list_active_users()}
+    try:
+        return {"subscribers": list_active_users()}
+    except Exception as exc:
+        logger.info("subscriber list failed %s", type(exc).__name__)
+        raise HTTPException(status_code=503, detail=type(exc).__name__) from None
 
 
 @app.get("/api/kite/health")

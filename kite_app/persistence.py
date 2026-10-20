@@ -15,7 +15,7 @@ _LOCK = threading.Lock()
 _READY = False
 _IDENTITY: sessionmaker | None = None
 _TRADING: sessionmaker | None = None
-_ROOT = Path(__file__).resolve().parent.parent
+_ROOT = Path(__file__).resolve().parent
 
 
 def reset_for_tests() -> None:
