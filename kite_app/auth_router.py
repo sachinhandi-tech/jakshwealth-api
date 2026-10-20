@@ -15,7 +15,7 @@ from fastapi.responses import RedirectResponse
 from kiteconnect import KiteConnect
 from kiteconnect.exceptions import KiteException
 
-from kite_app.identity_store import active_user, record_login
+from kite_app.identity_store import active_user, has_active_user, open_first_user, record_login
 from kite_app.models import load_platform_config
 from kite_app.session_store import SessionStore
 
@@ -26,10 +26,15 @@ _STATE_TTL_SECONDS = 600
 
 @router.get("/auth/zerodha/login")
 def zerodha_login(platform_user_id: uuid.UUID | None = Query(default=None)) -> RedirectResponse:
-    """Send the browser to Zerodha."""
-    if platform_user_id is None or active_user(platform_user_id) is None:
+    """Send the browser to Zerodha. The first sign-in opens the account."""
+    if platform_user_id is None:
+        if has_active_user():
+            raise HTTPException(status_code=403, detail="Subscriber is not active")
+        signed = _sign_desk_state()
+    elif active_user(platform_user_id) is None:
         raise HTTPException(status_code=403, detail="Subscriber is not active")
-    signed = _sign_state(platform_user_id)
+    else:
+        signed = _sign_state(platform_user_id)
     kite = KiteConnect(api_key=_api_key())
     state = quote(signed, safe="")
     return RedirectResponse(url=f"{kite.login_url()}&redirect_params=state%3D{state}", status_code=302)
@@ -65,7 +70,8 @@ def zerodha_callback(
             session=None,
         )
         raise HTTPException(status_code=400, detail="Zerodha login was not completed")
-    if platform_user_id is None or active_user(platform_user_id) is None:
+    opening_account = platform_user_id is None and not has_active_user()
+    if not opening_account and (platform_user_id is None or active_user(platform_user_id) is None):
         record_login(
             source="auth_callback",
             outcome="subscriber_inactive",
@@ -92,6 +98,18 @@ def zerodha_callback(
         )
         logger.info("Zerodha token exchange failed")
         raise HTTPException(status_code=401, detail="Zerodha login could not be completed") from None
+    if opening_account:
+        email = str(session.get("email") or session.get("user_id") or "").strip()
+        platform_user_id = open_first_user(email)
+        if platform_user_id is None:
+            record_login(
+                source="auth_callback",
+                outcome="subscriber_inactive",
+                platform_user_id=None,
+                api_key=api_key,
+                session=None,
+            )
+            raise HTTPException(status_code=403, detail="Subscriber is not active")
     record_login(
         source="auth_callback",
         outcome="completed",

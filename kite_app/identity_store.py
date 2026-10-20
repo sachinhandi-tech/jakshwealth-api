@@ -86,6 +86,38 @@ def record_login(
     return event_id
 
 
+def has_active_user() -> bool:
+    db = identity_session()
+    try:
+        found = db.scalar(select(IdentityUser.platform_user_id).where(IdentityUser.is_active.is_(True)).limit(1))
+        return found is not None
+    finally:
+        db.close()
+
+
+def open_first_user(email: str) -> uuid.UUID | None:
+    """Insert the first platform user. Returns None when an account already exists."""
+    text_email = email.strip()
+    if not text_email:
+        return None
+    from kite_app.persistence import admin_identity_session
+    from sqlalchemy.exc import IntegrityError
+
+    db = admin_identity_session()
+    try:
+        if db.scalar(select(IdentityUser.platform_user_id).limit(1)) is not None:
+            return None
+        user_id = uuid.uuid4()
+        db.add(IdentityUser(platform_user_id=user_id, email=text_email, is_active=True))
+        db.commit()
+        return user_id
+    except IntegrityError:
+        db.rollback()
+        return None
+    finally:
+        db.close()
+
+
 def list_active_users() -> list[dict]:
     db = identity_session()
     try:

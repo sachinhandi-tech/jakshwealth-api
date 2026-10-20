@@ -13,7 +13,7 @@ from fastapi import HTTPException
 from kiteconnect.exceptions import KiteException
 from sqlalchemy import func, select
 
-from kite_app.auth_router import _sign_desk_state, _sign_state, zerodha_callback
+from kite_app.auth_router import _sign_desk_state, _sign_state, zerodha_callback, zerodha_login
 from kite_app.gtt_orders import clear_recent_placements, live_gtt
 from kite_app.identity_models import IdentityUser, KiteSessionRow, LoginEvent
 from kite_app.persistence import identity_session, reset_for_tests, trading_session
@@ -175,6 +175,7 @@ def test_purge_removes_only_the_old_session_row(databases):
 
 
 def test_missing_platform_user_does_not_store_a_token(databases, monkeypatch):
+    _user()
     called = {"n": 0}
 
     class Counting(_Kite):
@@ -193,6 +194,31 @@ def test_missing_platform_user_does_not_store_a_token(databases, monkeypatch):
     assert event.outcome == "subscriber_inactive"
     assert db.scalar(select(func.count()).select_from(KiteSessionRow)) == 0
     db.close()
+
+
+def test_first_sign_in_opens_the_account(databases, monkeypatch):
+    class LoginKite(_Kite):
+        def login_url(self) -> str:
+            return "https://kite.zerodha.com/connect/login?v=3&api_key=platformkey1234"
+
+    monkeypatch.setattr("kite_app.auth_router.KiteConnect", LoginKite)
+    started = zerodha_login(None)
+    assert started.status_code == 302
+    assert "kite.zerodha.com" in started.headers["location"]
+    finished = zerodha_callback(request_token="one-time-request", state=_sign_desk_state(), status="success")
+    assert finished.status_code == 302
+    assert "access-token-value" not in str(finished.headers.get("location"))
+    db = identity_session()
+    user = db.scalar(select(IdentityUser))
+    event = db.scalar(select(LoginEvent))
+    session_row = db.scalar(select(KiteSessionRow))
+    db.close()
+    assert user is not None
+    assert user.email == "ada@example.com"
+    assert user.is_active is True
+    assert event.outcome == "completed"
+    assert event.platform_user_id == user.platform_user_id
+    assert session_row.platform_user_id == user.platform_user_id
 
 
 def test_stale_identity_session_is_rejected(databases):

@@ -15,14 +15,16 @@ _LOCK = threading.Lock()
 _READY = False
 _IDENTITY: sessionmaker | None = None
 _TRADING: sessionmaker | None = None
+_ADMIN: sessionmaker | None = None
 _ROOT = Path(__file__).resolve().parent
 
 
 def reset_for_tests() -> None:
-    global _READY, _IDENTITY, _TRADING
+    global _READY, _IDENTITY, _TRADING, _ADMIN
     _READY = False
     _IDENTITY = None
     _TRADING = None
+    _ADMIN = None
 
 
 def identity_session() -> Session:
@@ -35,6 +37,19 @@ def trading_session() -> Session:
     _prepare()
     assert _TRADING is not None
     return _TRADING()
+
+
+def admin_identity_session() -> Session:
+    """Master connection. The desk role can read users and cannot insert one."""
+    global _ADMIN
+    _prepare()
+    if _ADMIN is None:
+        url = _identity_url()
+        kwargs: dict = {"pool_pre_ping": True}
+        if url.startswith("sqlite"):
+            kwargs = {"connect_args": {"check_same_thread": False}}
+        _ADMIN = sessionmaker(bind=create_engine(url, **kwargs), expire_on_commit=False)
+    return _ADMIN()
 
 
 def _prepare() -> None:
