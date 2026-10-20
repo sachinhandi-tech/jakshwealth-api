@@ -334,7 +334,6 @@ def test_orders_replay_does_not_duplicate_events(databases):
 
 
 def test_sign_in_stays_open_outside_algo_hours(databases, monkeypatch):
-    monkeypatch.setattr("kite_app.kite_service.desk_is_open", lambda now=None: False)
     monkeypatch.setattr("kite_app.auth_router.KiteConnect", _Kite)
     user_id = _user()
     response = zerodha_callback(request_token="one-time-request", state=_sign_state(user_id), status="success")
@@ -431,7 +430,6 @@ def test_order_command_stores_the_id_and_not_a_fill(databases):
 
 
 def test_post_login_uses_the_server_secret_and_hides_the_token(databases, monkeypatch):
-    monkeypatch.setattr("kite_app.kite_service.desk_is_open", lambda now=None: True)
     user_id = _user()
     seen = {}
 

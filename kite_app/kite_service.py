@@ -20,7 +20,6 @@ from kite_app.signals import SignalScanError, scan_nifty100
 
 PROFILE_CACHE_SECONDS = 30
 _IST = ZoneInfo("Asia/Kolkata")
-DESK_CLOSED_MESSAGE = "Algo orders run on weekdays from 9:00 AM to 4:00 PM IST."
 QUOTE_SYMBOLS = (
     "NSE:RELIANCE",
     "NSE:TCS",
@@ -306,18 +305,6 @@ def _platform_user_id(value: str | None) -> uuid.UUID | None:
         return uuid.UUID(value)
     except ValueError:
         return None
-
-
-def desk_is_open(now: datetime | None = None) -> bool:
-    """Weekdays 9:00 AM inclusive through 4:00 PM exclusive, India time."""
-    current = now.astimezone(_IST) if now is not None else datetime.now(_IST)
-    if current.tzinfo is None:
-        current = current.replace(tzinfo=_IST)
-    if current.weekday() >= 5:
-        return False
-    start = current.replace(hour=9, minute=0, second=0, microsecond=0)
-    end = current.replace(hour=16, minute=0, second=0, microsecond=0)
-    return start <= current < end
 
 
 def access_token_expired(saved_at, now: datetime | None = None) -> bool:

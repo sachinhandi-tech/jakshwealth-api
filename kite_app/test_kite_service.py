@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from kite_app.kite_service import access_token_expired, desk_is_open, extract_request_token
+from kite_app.kite_service import access_token_expired, extract_request_token
 from kite_app.session_store import SessionStore
 
 
@@ -94,24 +94,22 @@ def test_access_token_lasts_until_the_next_ist_morning():
     assert access_token_expired(saved, datetime(2026, 10, 20, 0, 30, tzinfo=timezone.utc)) is True
 
 
-def test_algo_orders_are_refused_outside_weekday_hours(monkeypatch):
-    from fastapi import HTTPException
-
+def test_algo_orders_are_accepted_any_day(monkeypatch):
     from kite_app.main import LiveGttRequest, algo_live_gtt
 
-    monkeypatch.setattr("kite_app.main.desk_is_open", lambda now=None: False)
-    with pytest.raises(HTTPException) as caught:
-        algo_live_gtt(LiveGttRequest(confirm_live=True, orders=[]))
-    assert caught.value.status_code == 403
-    assert caught.value.detail == "Algo orders run on weekdays from 9:00 AM to 4:00 PM IST."
+    monkeypatch.setattr(
+        "kite_app.main.service.require_session",
+        lambda: {"platform_user_id": None, "user_id": "AB1234"},
+    )
+    monkeypatch.setattr("kite_app.main.service._require_client", lambda: object())
+    seen = {}
 
+    def place(kite, orders, confirm_live, platform_user_id=None, zerodha_user_id=None):
+        seen["confirm"] = confirm_live
+        seen["user"] = zerodha_user_id
+        return [{"symbol": "INFY"}]
 
-def test_desk_is_open_on_weekdays_from_nine_until_four():
-    monday_open = datetime(2026, 10, 19, 3, 30, tzinfo=timezone.utc)
-    monday_close = datetime(2026, 10, 19, 10, 30, tzinfo=timezone.utc)
-    friday_afternoon = datetime(2026, 10, 23, 9, 0, tzinfo=timezone.utc)
-    saturday = datetime(2026, 10, 24, 4, 30, tzinfo=timezone.utc)
-    assert desk_is_open(monday_open) is True
-    assert desk_is_open(monday_close) is False
-    assert desk_is_open(friday_afternoon) is True
-    assert desk_is_open(saturday) is False
+    monkeypatch.setattr("kite_app.main.live_gtt", place)
+    result = algo_live_gtt(LiveGttRequest(confirm_live=True, orders=[]))
+    assert result == {"orders": [{"symbol": "INFY"}]}
+    assert seen == {"confirm": True, "user": "AB1234"}
