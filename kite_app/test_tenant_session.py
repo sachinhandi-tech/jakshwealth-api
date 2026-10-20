@@ -43,18 +43,21 @@ def test_upsert_stores_ciphertext_for_today(monkeypatch: pytest.MonkeyPatch) -> 
     assert row.updated_at is not None
 
 
-def test_get_active_kite_client_rejects_a_stale_session(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_get_active_kite_client_rejects_a_stale_session(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     monkeypatch.setenv("FERNET_KEY", Fernet.generate_key().decode("ascii"))
     monkeypatch.setenv("KITE_API_KEY", "platform-key")
-    engine = create_engine("sqlite://")
-    Base.metadata.create_all(engine)
-    factory = sessionmaker(bind=engine, expire_on_commit=False)
-    monkeypatch.setattr("kite_app.session_manager.get_sessionmaker", lambda: factory)
+    monkeypatch.setenv("IDENTITY_DATABASE_URL", "sqlite:///" + (tmp_path / "identity.db").as_posix())
+    monkeypatch.setenv("TRADING_DATABASE_URL", "sqlite:///" + (tmp_path / "trading.db").as_posix())
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    from kite_app.identity_models import IdentityUser, KiteSessionRow
+    from kite_app.persistence import identity_session, reset_for_tests
+
+    reset_for_tests()
     user_id = uuid.uuid4()
-    db = factory()
-    db.add(User(platform_user_id=user_id, email="subscriber@example.com", is_active=True))
+    db = identity_session()
+    db.add(IdentityUser(platform_user_id=user_id, email="subscriber@example.com", is_active=True))
     db.add(
-        ZerodhaSession(
+        KiteSessionRow(
             platform_user_id=user_id,
             zerodha_user_id="AB1234",
             encrypted_access_token=encrypt_access_token("access-token-value"),

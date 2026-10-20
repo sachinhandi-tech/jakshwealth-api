@@ -6,6 +6,10 @@ import os
 
 os.environ.setdefault("KITE_SESSION_PATH", "/tmp/kite-session.json")
 os.environ.setdefault("KITE_DB_SECRET_ID", "jakshwealth/dev/postgres")
+os.environ.setdefault("SCANNER_CACHE_BUCKET", "jakshwealth-artifacts-dev-aps2")
+os.environ.setdefault("SCANNER_CACHE_KEY", "kite-scanner/scanner-data.json")
+os.environ.setdefault("KITE_SESSION_BUCKET", "jakshwealth-artifacts-dev-aps2")
+os.environ.setdefault("KITE_SESSION_KEY", "kite-session/session.json")
 
 from kite_app.models import load_platform_config
 

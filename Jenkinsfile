@@ -103,6 +103,22 @@ pipeline {
             }
         }
 
+        stage('Publish EC2 API bundle') {
+            when {
+                expression { params.TERRAFORM_ACTION == 'apply' }
+            }
+            steps {
+                script {
+                    jakshAws {
+                        sh '''
+                            chmod +x .cicd/ec2_api_bundle.sh
+                            .cicd/ec2_api_bundle.sh "${DEPLOY_ENV}"
+                        '''
+                    }
+                }
+            }
+        }
+
         stage('Terraform') {
             steps {
                 script {

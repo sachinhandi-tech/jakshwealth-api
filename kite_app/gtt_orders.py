@@ -41,11 +41,28 @@ def gtt_state(kite, orders: list[dict]) -> list[dict]:
     return [_evaluate(kite, order, account, create=False) for order in orders]
 
 
-def live_gtt(kite, orders: list[dict], confirm_live: bool | None) -> list[dict]:
+def live_gtt(kite, orders: list[dict], confirm_live: bool | None, platform_user_id=None, zerodha_user_id=None) -> list[dict]:
     if confirm_live is not True:
+        rejected = []
+        for order in orders:
+            row = _blank(_symbol(str(order.get("symbol") or "")), _optional_decimal(order.get("last_price")))
+            row["message"] = "confirm_live must be true to place a buy GTT."
+            rejected.append(row)
+        _record_attempts(rejected, confirm_live, platform_user_id, zerodha_user_id)
         raise GttRejected("confirm_live must be true to place a buy GTT.")
     account = _read_account(kite)
-    return [_evaluate(kite, order, account, create=True) for order in orders]
+    rows = []
+    for order in orders:
+        try:
+            row = _evaluate(kite, order, account, create=True)
+        except TokenException as exc:
+            row = _blank(_symbol(str(order.get("symbol") or "")), _optional_decimal(order.get("last_price")))
+            row["message"] = f"Unable to place buy GTT: {_broker_message(exc)}"
+            _record_attempts([row], confirm_live, platform_user_id, zerodha_user_id)
+            raise
+        _record_attempts([row], confirm_live, platform_user_id, zerodha_user_id)
+        rows.append(row)
+    return rows
 
 
 def _evaluate(kite, order: dict, account: dict, create: bool) -> dict:
@@ -109,6 +126,22 @@ def _evaluate(kite, order: dict, account: dict, create: bool) -> dict:
         message=CREATED_MESSAGE,
     )
     return row
+
+
+def _record_attempts(rows: list[dict], confirm_live, platform_user_id, zerodha_user_id) -> None:
+    from kite_app.trading_store import record_gtt_attempt
+
+    prefix = "Unable to place buy GTT: "
+    for row in rows:
+        message = str(row.get("message") or "")
+        error = message[len(prefix):] if message.startswith(prefix) else None
+        record_gtt_attempt(
+            platform_user_id=platform_user_id,
+            zerodha_user_id=zerodha_user_id,
+            row=row,
+            confirm_live=confirm_live,
+            kite_error_text=error,
+        )
 
 
 def _place_buy(kite, symbol: str, buy_price: Decimal, last_price: Decimal) -> tuple[str, bool]:

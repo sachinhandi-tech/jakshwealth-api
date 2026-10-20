@@ -1,12 +1,13 @@
-"""Local Kite Connect API. The access token is saved on disk and never sent to the browser."""
+"""Local Kite Connect API. The access token is encrypted in the identity database and is never sent to the browser."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
@@ -20,6 +21,7 @@ from kite_app.kite_service import KiteAuthError, KiteService
 from kite_app.scan_jobs import enqueue_scan, read_scan
 from kite_app.scanner_data import build_scanner_payload, ohlc_snapshot
 from kite_app.signals import SignalScanError
+from kite_app.request_context import platform_user_var, request_id_var
 from kite_app.ticks import hub
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -37,16 +39,37 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def bind_request_context(request: Request, call_next):
+    event = request.scope.get("aws.event") or {}
+    context = event.get("requestContext") or {}
+    incoming = (
+        request.headers.get("x-amzn-requestid")
+        or request.headers.get("x-request-id")
+        or context.get("requestId")
+    )
+    request_token = request_id_var.set(str(incoming or uuid.uuid4()))
+    user_token = platform_user_var.set(request.headers.get("x-platform-user-id"))
+    try:
+        response = await call_next(request)
+        response.headers["X-Request-Id"] = request_id_var.get() or ""
+        return response
+    finally:
+        request_id_var.reset(request_token)
+        platform_user_var.reset(user_token)
+
+
 class LoginRequest(BaseModel):
     api_key: str = Field(min_length=1)
-    api_secret: str = Field(min_length=1)
     request_token: str = Field(min_length=1)
+    platform_user_id: uuid.UUID | None = None
 
 
 class SessionStatus(BaseModel):
     authenticated: bool
     user_name: str | None = None
     user_id: str | None = None
+    platform_user_id: str | None = None
 
 
 class ProfileResponse(BaseModel):
@@ -136,6 +159,13 @@ def _auth_error(exc: KiteAuthError) -> HTTPException:
     return HTTPException(status_code=401 if missing else 400, detail=str(exc))
 
 
+@app.get("/api/kite/subscribers")
+def subscribers() -> dict:
+    from kite_app.identity_store import list_active_users
+
+    return {"subscribers": list_active_users()}
+
+
 @app.get("/api/kite/health")
 def health() -> dict:
     return {"status": "ok"}
@@ -149,9 +179,25 @@ def session_status() -> dict:
 @app.post("/api/kite/login", response_model=SessionStatus)
 def login(body: LoginRequest) -> dict:
     try:
-        return service.login(body.api_key, body.api_secret, body.request_token)
+        return service.login(body.request_token, body.platform_user_id)
     except KiteAuthError as exc:
         raise _auth_error(exc) from exc
+
+
+@app.post("/api/kite/postback")
+async def kite_postback(request: Request) -> JSONResponse:
+    """Verify the postback checksum and commit it before answering.
+
+    The URL of this route still has to be saved in the Kite developer console.
+    That console step is outside this code.
+    """
+    from kite_app.trading_store import accept_postback
+
+    raw = await request.body()
+    result = accept_postback(raw)
+    if not result["checksum_valid"]:
+        return JSONResponse(status_code=400, content={"checksum_valid": False})
+    return JSONResponse(status_code=200, content={"checksum_valid": True})
 
 
 @app.post("/api/kite/logout", response_model=SessionStatus)
@@ -178,9 +224,7 @@ def quotes() -> list[dict]:
 @app.post("/api/kite/signals")
 def signals(body: SignalRequest) -> JSONResponse:
     try:
-        record = service.store.load()
-        if record is None:
-            raise KiteAuthError("Log in with a fresh request token. No saved session was found.")
+        record = service.require_session()
         params = service.scan_params(
             body.short_window,
             body.long_window,
@@ -250,12 +294,16 @@ def ohlc(symbols: str = "") -> dict:
 
 
 @app.websocket("/ws/ticks")
-async def ticks(websocket: WebSocket, tokens: str = "", mode: str = "full") -> None:
+async def ticks(websocket: WebSocket, tokens: str = "", mode: str = "full", platform_user_id: str = "") -> None:
     await websocket.accept()
     if mode != "full":
         await websocket.close(code=1008)
         return
-    record = service.store.load()
+    user_token = platform_user_var.set(platform_user_id or None)
+    try:
+        record = service.saved_session()
+    finally:
+        platform_user_var.reset(user_token)
     subscribed = set()
     for part in tokens.split(","):
         part = part.strip()
@@ -272,7 +320,13 @@ async def ticks(websocket: WebSocket, tokens: str = "", mode: str = "full") -> N
 
     listener_id = None
     try:
-        listener_id = hub.add(str(record["api_key"]), str(record["access_token"]), subscribed, publish)
+        listener_id = hub.add(
+            str(record["api_key"]),
+            str(record["access_token"]),
+            subscribed,
+            publish,
+            platform_user_id=record.get("platform_user_id"),
+        )
         while True:
             await websocket.send_json(await queue.get())
     except WebSocketDisconnect:
@@ -305,8 +359,17 @@ def algo_gtt_state(body: GttStateRequest) -> dict:
 @app.post("/api/algo-orders/live-gtt")
 def algo_live_gtt(body: LiveGttRequest) -> dict:
     try:
+        record = service.require_session()
         kite = service._require_client()
-        return {"orders": live_gtt(kite, _gtt_orders(body.orders), body.confirm_live)}
+        return {
+            "orders": live_gtt(
+                kite,
+                _gtt_orders(body.orders),
+                body.confirm_live,
+                platform_user_id=record.get("platform_user_id"),
+                zerodha_user_id=record.get("user_id"),
+            )
+        }
     except GttRejected as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except SignalScanError as exc:

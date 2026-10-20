@@ -9,10 +9,9 @@ from zoneinfo import ZoneInfo
 
 from cryptography.fernet import Fernet, InvalidToken
 from kiteconnect import KiteConnect
-from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
-from kite_app.models import User, ZerodhaSession, get_sessionmaker, load_platform_config
+from kite_app.models import ZerodhaSession, load_platform_config
 
 _IST = ZoneInfo("Asia/Kolkata")
 
@@ -63,13 +62,16 @@ def upsert_zerodha_session(
 
 def get_active_kite_client(platform_user_id: str) -> KiteConnect:
     """Return a Kite client whose access token is valid for today in IST."""
+    from kite_app.identity_models import KiteSessionRow
+    from kite_app.identity_store import active_user
+    from kite_app.persistence import identity_session
+
     user_id = uuid.UUID(platform_user_id)
-    db = get_sessionmaker()()
+    if active_user(user_id) is None:
+        raise SessionExpiredException("subscriber is not active")
+    db = identity_session()
     try:
-        user = db.get(User, user_id)
-        if user is None or not user.is_active:
-            raise SessionExpiredException("subscriber is not active")
-        row = db.get(ZerodhaSession, user_id)
+        row = db.get(KiteSessionRow, user_id)
         if row is None or row.token_date != today_ist():
             raise SessionExpiredException("zerodha session is missing or stale")
         token = _decrypt(row.encrypted_access_token)
@@ -81,14 +83,13 @@ def get_active_kite_client(platform_user_id: str) -> KiteConnect:
 
 
 def purge_expired_sessions() -> int:
-    """Delete sessions from previous IST dates. Call from Celery beat after 06:00 IST."""
-    db = get_sessionmaker()()
-    try:
-        result = db.execute(delete(ZerodhaSession).where(ZerodhaSession.token_date < today_ist()))
-        db.commit()
-        return int(result.rowcount or 0)
-    finally:
-        db.close()
+    """Delete identity session rows from previous IST dates. login_events stays.
+
+    Run after 06:00 IST. The comment on the previous table said the same.
+    """
+    from kite_app.identity_store import purge_expired_session_rows
+
+    return purge_expired_session_rows()
 
 
 def _decrypt(ciphertext: str) -> str:

@@ -19,6 +19,10 @@
     "ENVIRONMENT": "dev",
     "LOG_LEVEL": "INFO",
     "KITE_SESSION_PATH": "/tmp/kite-session.json",
-    "KITE_DB_SECRET_ID": "jakshwealth/dev/postgres"
+    "KITE_DB_SECRET_ID": "jakshwealth/dev/postgres",
+    "SCANNER_CACHE_BUCKET": "jakshwealth-artifacts-dev-aps2",
+    "SCANNER_CACHE_KEY": "kite-scanner/scanner-data.json",
+    "KITE_SESSION_BUCKET": "jakshwealth-artifacts-dev-aps2",
+    "KITE_SESSION_KEY": "kite-session/session.json"
   }
 }

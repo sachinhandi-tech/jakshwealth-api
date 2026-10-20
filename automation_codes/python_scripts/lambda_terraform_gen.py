@@ -33,7 +33,14 @@ def lambda_generation(function_name, code_dir, subnet_group, timeout='900', alar
     if function_name in runtime_lambda_functions:
         runtime = "runtime = \"python3.12\"\n"
 
-    if enable_vpc:
+    if function_name == "jw_kite":
+        vpc_config = (
+            "subnet_ids = data.terraform_remote_state.postgres.outputs.kite_private_subnet_ids\n\t"
+            "security_group_ids = [data.terraform_remote_state.postgres.outputs.kite_lambda_security_group_id]\n\t"
+            "alert_funnel_arn = \"\"\n\t"
+            "enable_log_subscription = false\n\t"
+        )
+    elif enable_vpc:
         vpc_config = (
             f"subnet_ids = \"${'{'}data.aws_subnets.{subnet_group}-subnets.ids{'}'}\"\n\t"
             f"security_group_ids = [{security_groups_str}]\n\t"
@@ -170,6 +177,17 @@ def create_lambda_tf(env, code_dir, terraform_dir):
         update_policies_if_needed(env, lambda_integration_parameters, terraform_dir)
 
     with open(terraform_dir + '/lambda.tf', 'w') as file:
+        file.write(
+            "data \"terraform_remote_state\" \"postgres\" {\n"
+            "  backend = \"s3\"\n"
+            "  config = {\n"
+            f"    bucket         = \"jakshwealth-infra-{env}-aps2\"\n"
+            f"    key            = \"{env}/jakshwealth-postgres/terraform.tfstate\"\n"
+            "    region         = \"ap-south-2\"\n"
+            "    dynamodb_table = \"terraform-state-lock\"\n"
+            "  }\n"
+            "}\n\n"
+        )
         file.write(lambda_dirs_strings)
 
 

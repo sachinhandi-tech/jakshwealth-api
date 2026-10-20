@@ -1,18 +1,26 @@
-"""Kite Connect calls. Access tokens stay in the session file and are never returned."""
+"""Kite Connect calls. Access tokens stay encrypted in jakshwealth_identity."""
 
 from __future__ import annotations
 
+import logging
+import os
 import time
-from datetime import datetime, timezone
+import uuid
+from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs, urlparse
+from zoneinfo import ZoneInfo
 
 from kiteconnect import KiteConnect
 from kiteconnect.exceptions import KiteException, TokenException
 
 from kite_app.session_store import SessionStore
+
+logger = logging.getLogger("kite_app.kite")
 from kite_app.signals import SignalScanError, scan_nifty100
 
 PROFILE_CACHE_SECONDS = 30
+_IST = ZoneInfo("Asia/Kolkata")
+DESK_CLOSED_MESSAGE = "The Kite desk runs on weekdays from 9:00 AM to 4:00 PM IST."
 QUOTE_SYMBOLS = (
     "NSE:RELIANCE",
     "NSE:TCS",
@@ -44,21 +52,55 @@ class KiteService:
         self._profile_cache: tuple[float, dict] | None = None
 
     def session_status(self) -> dict:
-        record = self.store.load()
+        record = self.saved_session()
         if record is None:
             return {"authenticated": False, "user_name": None, "user_id": None}
         return {
             "authenticated": True,
             "user_name": record.get("user_name") or None,
             "user_id": record.get("user_id") or None,
+            "platform_user_id": None if record.get("platform_user_id") is None else str(record.get("platform_user_id")),
         }
 
-    def login(self, api_key: str, api_secret: str, request_token: str) -> dict:
-        api_key = api_key.strip()
-        api_secret = api_secret.strip()
+    def login(self, request_token: str, platform_user_id: uuid.UUID | None) -> dict:
+        from kite_app.identity_store import active_user, record_login
+        from kite_app.models import load_platform_config
+
+        load_platform_config()
+        api_key = os.environ.get("KITE_API_KEY", "").strip()
+        if not desk_is_open():
+            if api_key:
+                record_login(
+                    source="kite_login",
+                    outcome="desk_closed",
+                    platform_user_id=platform_user_id,
+                    api_key=api_key,
+                    session=None,
+                )
+            raise KiteAuthError(DESK_CLOSED_MESSAGE)
+        api_secret = os.environ.get("KITE_API_SECRET", "").strip()
         request_token = extract_request_token(request_token)
-        if not api_key or not api_secret or not request_token:
-            raise KiteAuthError("API key, API secret, and request token are required.")
+        if platform_user_id is None or active_user(platform_user_id) is None:
+            if api_key:
+                record_login(
+                    source="kite_login",
+                    outcome="subscriber_inactive",
+                    platform_user_id=platform_user_id,
+                    api_key=api_key,
+                    session=None,
+                )
+            raise KiteAuthError("Subscriber is not active")
+        if not request_token:
+            record_login(
+                source="kite_login",
+                outcome="not_completed",
+                platform_user_id=platform_user_id,
+                api_key=api_key,
+                session=None,
+            )
+            raise KiteAuthError("A request token is required.")
+        if not api_key or not api_secret:
+            raise KiteAuthError("Platform Kite app is not configured")
 
         kite = KiteConnect(api_key=api_key)
         try:
@@ -67,30 +109,54 @@ class KiteService:
             kite.set_access_token(access_token)
             profile = kite.profile()
         except KiteException as exc:
+            record_login(
+                source="kite_login",
+                outcome="exchange_failed",
+                platform_user_id=platform_user_id,
+                api_key=api_key,
+                session=None,
+            )
             raise KiteAuthError(_safe_kite_message(exc)) from exc
         except KeyError as exc:
+            record_login(
+                source="kite_login",
+                outcome="exchange_failed",
+                platform_user_id=platform_user_id,
+                api_key=api_key,
+                session=None,
+            )
             raise KiteAuthError("Zerodha did not return an access token.") from exc
 
         public = _public_profile(profile)
-        self.store.save(
-            {
-                "api_key": api_key,
-                "access_token": access_token,
-                "user_id": public["user_id"],
-                "user_name": public["user_name"],
-                "saved_at": datetime.now(timezone.utc).isoformat(),
-            }
+        for name in ("user_name", "user_shortname", "email", "user_type", "broker", "exchanges", "products", "order_types", "avatar_url"):
+            if name in profile and name not in session:
+                session[name] = profile[name]
+        record_login(
+            source="kite_login",
+            outcome="completed",
+            platform_user_id=platform_user_id,
+            api_key=api_key,
+            session=session,
         )
+        self.store.clear()
         self._client = kite
-        self._client_key = (api_key, access_token)
+        self._client_key = (api_key, str(session["access_token"]))
+        del access_token
+        del session
         self._profile_cache = (time.monotonic(), public)
         return {
             "authenticated": True,
             "user_name": public["user_name"],
             "user_id": public["user_id"],
+            "platform_user_id": None if platform_user_id is None else str(platform_user_id),
         }
 
     def logout(self) -> dict:
+        from kite_app.identity_store import invalidate_current_sessions
+        from kite_app.request_context import platform_user_var
+
+        user_id = _platform_user_id(platform_user_var.get())
+        invalidate_current_sessions(user_id)
         self.store.clear()
         self._client = None
         self._client_key = None
@@ -98,6 +164,7 @@ class KiteService:
         return {"authenticated": False, "user_name": None, "user_id": None}
 
     def profile(self) -> dict:
+        _ensure_desk_open()
         cached = self._profile_cache
         if cached and time.monotonic() - cached[0] < PROFILE_CACHE_SECONDS:
             return cached[1]
@@ -107,11 +174,6 @@ class KiteService:
         except KiteException as exc:
             self._drop_expired_session(exc)
             raise KiteAuthError(_safe_kite_message(exc)) from exc
-        record = self.store.load()
-        if record is not None:
-            record["user_id"] = public["user_id"]
-            record["user_name"] = public["user_name"]
-            self.store.save(record)
         self._profile_cache = (time.monotonic(), public)
         return public
 
@@ -206,22 +268,96 @@ class KiteService:
             "scan_mode": scan_mode,
         }
 
-    def _require_client(self) -> KiteConnect:
-        record = self.store.load()
+    def saved_session(self) -> dict | None:
+        if not desk_is_open():
+            return None
+        from kite_app.identity_store import current_desk_session
+        from kite_app.request_context import platform_user_var
+
+        record = current_desk_session(_platform_user_id(platform_user_var.get()))
+        if record is None:
+            return None
+        record["api_key"] = os.environ.get("KITE_API_KEY", "").strip()
+        return record
+
+    def require_session(self) -> dict:
+        _ensure_desk_open()
+        record = self.saved_session()
         if record is None:
             raise KiteAuthError("Log in with a fresh request token. No saved session was found.")
+        return record
+
+    def _require_client(self) -> KiteConnect:
+        record = self.require_session()
         key = (str(record["api_key"]), str(record["access_token"]))
         if self._client is None or self._client_key != key:
             client = KiteConnect(api_key=key[0])
             client.set_access_token(key[1])
             self._client = client
             self._client_key = key
+        self._reconcile(self._client, record)
         return self._client
+
+    def _reconcile(self, client: KiteConnect, record: dict) -> None:
+        from kite_app.session_manager import today_ist
+        from kite_app.trading_store import reconcile_book
+
+        try:
+            reconcile_book(client, record.get("platform_user_id"), record.get("user_id"), today_ist().isoformat())
+        except Exception as exc:
+            logger.info("reconcile failed %s", type(exc).__name__)
 
     def _drop_expired_session(self, exc: KiteException) -> None:
         message = _safe_kite_message(exc).lower()
         if "token" in message or getattr(exc, "code", None) in (403,):
             self.logout()
+
+
+def _platform_user_id(value: str | None) -> uuid.UUID | None:
+    if not value:
+        return None
+    try:
+        return uuid.UUID(value)
+    except ValueError:
+        return None
+
+
+def desk_is_open(now: datetime | None = None) -> bool:
+    """Weekdays 9:00 AM inclusive through 4:00 PM exclusive, India time."""
+    current = now.astimezone(_IST) if now is not None else datetime.now(_IST)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=_IST)
+    if current.weekday() >= 5:
+        return False
+    start = current.replace(hour=9, minute=0, second=0, microsecond=0)
+    end = current.replace(hour=16, minute=0, second=0, microsecond=0)
+    return start <= current < end
+
+
+def _ensure_desk_open() -> None:
+    if not desk_is_open():
+        raise KiteAuthError(DESK_CLOSED_MESSAGE)
+
+
+def access_token_expired(saved_at, now: datetime | None = None) -> bool:
+    """Zerodha access tokens stop working at the next 6:00 AM IST. There is no refresh token."""
+    text = str(saved_at or "").strip()
+    if not text:
+        return False
+    try:
+        stamp = datetime.fromisoformat(text)
+    except ValueError:
+        return False
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    saved = stamp.astimezone(_IST)
+    expires = saved.replace(hour=6, minute=0, second=0, microsecond=0)
+    if saved >= expires:
+        expires += timedelta(days=1)
+    current = now.astimezone(_IST) if now is not None else datetime.now(_IST)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=_IST)
+    return current >= expires
 
 
 def _public_profile(profile: dict) -> dict:

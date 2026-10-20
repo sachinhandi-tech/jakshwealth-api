@@ -8,16 +8,16 @@ import logging
 import os
 import time
 import uuid
-from datetime import datetime, timezone
-from urllib.parse import quote
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import RedirectResponse
 from kiteconnect import KiteConnect
 from kiteconnect.exceptions import KiteException
 
-from kite_app.models import User, get_sessionmaker, load_platform_config
-from kite_app.session_manager import upsert_zerodha_session
+from kite_app.identity_store import active_user, record_login
+from kite_app.kite_service import DESK_CLOSED_MESSAGE, desk_is_open
+from kite_app.models import load_platform_config
 from kite_app.session_store import SessionStore
 
 logger = logging.getLogger("kite_app.auth")
@@ -28,17 +28,12 @@ _STATE_TTL_SECONDS = 600
 @router.get("/auth/zerodha/login")
 def zerodha_login(platform_user_id: uuid.UUID | None = Query(default=None)) -> RedirectResponse:
     """Send the browser to Zerodha. The API key stays in Secrets Manager."""
-    if platform_user_id is not None:
-        db = get_sessionmaker()()
-        try:
-            user = db.get(User, platform_user_id)
-        finally:
-            db.close()
-        if user is None or not user.is_active:
-            raise HTTPException(status_code=403, detail="Subscriber is not active")
-        signed = _sign_state(platform_user_id)
-    else:
-        signed = _sign_desk_state()
+    if not desk_is_open():
+        _record_closed("auth_callback", platform_user_id)
+        raise HTTPException(status_code=403, detail=DESK_CLOSED_MESSAGE)
+    if platform_user_id is None or active_user(platform_user_id) is None:
+        raise HTTPException(status_code=403, detail="Subscriber is not active")
+    signed = _sign_state(platform_user_id)
     kite = KiteConnect(api_key=_api_key())
     state = quote(signed, safe="")
     return RedirectResponse(url=f"{kite.login_url()}&redirect_params=state%3D{state}", status_code=302)
@@ -50,48 +45,96 @@ def zerodha_callback(
     state: str = Query(default=""),
     status: str = Query(default=""),
 ) -> RedirectResponse:
-    """Exchange the one-time request token and store only the encrypted access token."""
+    """Exchange the one-time request token and store only the encrypted access token.
+
+    The postback URL is not this route. The Kite developer console still has to
+    be given the postback URL. That console step is outside this code.
+    """
+    platform_user_id = None
+    state_error = None
+    if state:
+        try:
+            platform_user_id = _read_state(state)
+        except HTTPException as exc:
+            state_error = exc
+    if not desk_is_open():
+        _record_closed("auth_callback", platform_user_id)
+        raise HTTPException(status_code=403, detail=DESK_CLOSED_MESSAGE)
+    if state_error is not None:
+        raise state_error
+    api_key = _api_key()
     if status == "error" or not request_token:
+        record_login(
+            source="auth_callback",
+            outcome="not_completed",
+            platform_user_id=platform_user_id,
+            api_key=api_key,
+            session=None,
+        )
         raise HTTPException(status_code=400, detail="Zerodha login was not completed")
-    platform_user_id = _read_state(state)
+    if platform_user_id is None or active_user(platform_user_id) is None:
+        record_login(
+            source="auth_callback",
+            outcome="subscriber_inactive",
+            platform_user_id=platform_user_id,
+            api_key=api_key,
+            session=None,
+        )
+        raise HTTPException(status_code=403, detail="Subscriber is not active")
     load_platform_config()
     api_secret = os.environ.get("KITE_API_SECRET", "").strip()
     if not api_secret:
         raise HTTPException(status_code=503, detail="Platform Kite app is not configured")
-    api_key = _api_key()
     kite = KiteConnect(api_key=api_key)
     try:
         session = kite.generate_session(request_token, api_secret=api_secret)
-        access_token = str(session.pop("access_token"))
-        zerodha_user_id = str(session.pop("user_id"))
-        user_name = str(session.get("user_name") or zerodha_user_id)
+        access_token = str(session["access_token"])
     except (KiteException, KeyError, TypeError):
+        record_login(
+            source="auth_callback",
+            outcome="exchange_failed",
+            platform_user_id=platform_user_id,
+            api_key=api_key,
+            session=None,
+        )
         logger.info("Zerodha token exchange failed")
         raise HTTPException(status_code=401, detail="Zerodha login could not be completed") from None
-    SessionStore().save(
-        {
-            "api_key": api_key,
-            "access_token": access_token,
-            "user_id": zerodha_user_id,
-            "user_name": user_name,
-            "saved_at": datetime.now(timezone.utc).isoformat(),
-        }
+    record_login(
+        source="auth_callback",
+        outcome="completed",
+        platform_user_id=platform_user_id,
+        api_key=api_key,
+        session=session,
     )
-    if platform_user_id is not None:
-        db = get_sessionmaker()()
-        try:
-            user = db.get(User, platform_user_id)
-            if user is None or not user.is_active:
-                raise HTTPException(status_code=403, detail="Subscriber is not active")
-            upsert_zerodha_session(db, platform_user_id, zerodha_user_id, access_token)
-        finally:
-            db.close()
+    SessionStore().clear()
     del access_token
-    destination = os.environ.get(
-        "KITE_POST_LOGIN_URL",
-        "https://d33hvt9s5bgs3.cloudfront.net/kite/dashboard",
+    del session
+    destination = _with_platform_user(
+        os.environ.get(
+            "KITE_POST_LOGIN_URL",
+            "https://d33hvt9s5bgs3.cloudfront.net/kite/dashboard",
+        ),
+        platform_user_id,
     )
     return RedirectResponse(url=destination, status_code=302)
+
+
+def _record_closed(source: str, platform_user_id: uuid.UUID | None) -> None:
+    load_platform_config()
+    record_login(
+        source=source,
+        outcome="desk_closed",
+        platform_user_id=platform_user_id,
+        api_key=os.environ.get("KITE_API_KEY", "").strip(),
+        session=None,
+    )
+
+
+def _with_platform_user(destination: str, platform_user_id: uuid.UUID) -> str:
+    parts = urlsplit(destination)
+    query = dict(parse_qsl(parts.query))
+    query["platform_user_id"] = str(platform_user_id)
+    return urlunsplit(parts._replace(query=urlencode(query)))
 
 
 def _api_key() -> str:
