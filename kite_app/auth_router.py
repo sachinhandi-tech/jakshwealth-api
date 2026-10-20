@@ -16,7 +16,6 @@ from kiteconnect import KiteConnect
 from kiteconnect.exceptions import KiteException
 
 from kite_app.identity_store import active_user, record_login
-from kite_app.kite_service import DESK_CLOSED_MESSAGE, desk_is_open
 from kite_app.models import load_platform_config
 from kite_app.session_store import SessionStore
 
@@ -27,10 +26,7 @@ _STATE_TTL_SECONDS = 600
 
 @router.get("/auth/zerodha/login")
 def zerodha_login(platform_user_id: uuid.UUID | None = Query(default=None)) -> RedirectResponse:
-    """Send the browser to Zerodha. The API key stays in Secrets Manager."""
-    if not desk_is_open():
-        _record_closed("auth_callback", platform_user_id)
-        raise HTTPException(status_code=403, detail=DESK_CLOSED_MESSAGE)
+    """Send the browser to Zerodha."""
     if platform_user_id is None or active_user(platform_user_id) is None:
         raise HTTPException(status_code=403, detail="Subscriber is not active")
     signed = _sign_state(platform_user_id)
@@ -57,9 +53,6 @@ def zerodha_callback(
             platform_user_id = _read_state(state)
         except HTTPException as exc:
             state_error = exc
-    if not desk_is_open():
-        _record_closed("auth_callback", platform_user_id)
-        raise HTTPException(status_code=403, detail=DESK_CLOSED_MESSAGE)
     if state_error is not None:
         raise state_error
     api_key = _api_key()
@@ -117,17 +110,6 @@ def zerodha_callback(
         platform_user_id,
     )
     return RedirectResponse(url=destination, status_code=302)
-
-
-def _record_closed(source: str, platform_user_id: uuid.UUID | None) -> None:
-    load_platform_config()
-    record_login(
-        source=source,
-        outcome="desk_closed",
-        platform_user_id=platform_user_id,
-        api_key=os.environ.get("KITE_API_KEY", "").strip(),
-        session=None,
-    )
 
 
 def _with_platform_user(destination: str, platform_user_id: uuid.UUID) -> str:

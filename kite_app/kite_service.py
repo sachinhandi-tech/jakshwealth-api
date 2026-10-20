@@ -20,7 +20,7 @@ from kite_app.signals import SignalScanError, scan_nifty100
 
 PROFILE_CACHE_SECONDS = 30
 _IST = ZoneInfo("Asia/Kolkata")
-DESK_CLOSED_MESSAGE = "The Kite desk runs on weekdays from 9:00 AM to 4:00 PM IST."
+DESK_CLOSED_MESSAGE = "Algo orders run on weekdays from 9:00 AM to 4:00 PM IST."
 QUOTE_SYMBOLS = (
     "NSE:RELIANCE",
     "NSE:TCS",
@@ -68,16 +68,6 @@ class KiteService:
 
         load_platform_config()
         api_key = os.environ.get("KITE_API_KEY", "").strip()
-        if not desk_is_open():
-            if api_key:
-                record_login(
-                    source="kite_login",
-                    outcome="desk_closed",
-                    platform_user_id=platform_user_id,
-                    api_key=api_key,
-                    session=None,
-                )
-            raise KiteAuthError(DESK_CLOSED_MESSAGE)
         api_secret = os.environ.get("KITE_API_SECRET", "").strip()
         request_token = extract_request_token(request_token)
         if platform_user_id is None or active_user(platform_user_id) is None:
@@ -164,7 +154,6 @@ class KiteService:
         return {"authenticated": False, "user_name": None, "user_id": None}
 
     def profile(self) -> dict:
-        _ensure_desk_open()
         cached = self._profile_cache
         if cached and time.monotonic() - cached[0] < PROFILE_CACHE_SECONDS:
             return cached[1]
@@ -269,8 +258,6 @@ class KiteService:
         }
 
     def saved_session(self) -> dict | None:
-        if not desk_is_open():
-            return None
         from kite_app.identity_store import current_desk_session
         from kite_app.request_context import platform_user_var
 
@@ -281,7 +268,6 @@ class KiteService:
         return record
 
     def require_session(self) -> dict:
-        _ensure_desk_open()
         record = self.saved_session()
         if record is None:
             raise KiteAuthError("Log in with a fresh request token. No saved session was found.")
@@ -332,11 +318,6 @@ def desk_is_open(now: datetime | None = None) -> bool:
     start = current.replace(hour=9, minute=0, second=0, microsecond=0)
     end = current.replace(hour=16, minute=0, second=0, microsecond=0)
     return start <= current < end
-
-
-def _ensure_desk_open() -> None:
-    if not desk_is_open():
-        raise KiteAuthError(DESK_CLOSED_MESSAGE)
 
 
 def access_token_expired(saved_at, now: datetime | None = None) -> bool:

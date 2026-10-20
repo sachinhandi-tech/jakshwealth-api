@@ -17,7 +17,7 @@ from kiteconnect.exceptions import TokenException
 from kite_app.auth_router import router as zerodha_auth_router
 from kite_app.gtt_orders import GttRejected, gtt_state, live_gtt
 from kite_app.inbox import recent_signals, remember
-from kite_app.kite_service import KiteAuthError, KiteService
+from kite_app.kite_service import DESK_CLOSED_MESSAGE, KiteAuthError, KiteService, desk_is_open
 from kite_app.scan_jobs import enqueue_scan, read_scan
 from kite_app.scanner_data import build_scanner_payload, ohlc_snapshot
 from kite_app.signals import SignalScanError
@@ -362,6 +362,8 @@ def algo_gtt_state(body: GttStateRequest) -> dict:
 
 @app.post("/api/algo-orders/live-gtt")
 def algo_live_gtt(body: LiveGttRequest) -> dict:
+    if not desk_is_open():
+        raise HTTPException(status_code=403, detail=DESK_CLOSED_MESSAGE)
     try:
         record = service.require_session()
         kite = service._require_client()

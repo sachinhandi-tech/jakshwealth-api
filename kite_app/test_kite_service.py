@@ -1,6 +1,7 @@
+from datetime import datetime, timezone
 from pathlib import Path
 
-from datetime import datetime, timezone
+import pytest
 
 from kite_app.kite_service import access_token_expired, desk_is_open, extract_request_token
 from kite_app.session_store import SessionStore
@@ -91,6 +92,18 @@ def test_access_token_lasts_until_the_next_ist_morning():
     saved = "2026-10-19T16:30:00+00:00"
     assert access_token_expired(saved, datetime(2026, 10, 20, 0, 29, tzinfo=timezone.utc)) is False
     assert access_token_expired(saved, datetime(2026, 10, 20, 0, 30, tzinfo=timezone.utc)) is True
+
+
+def test_algo_orders_are_refused_outside_weekday_hours(monkeypatch):
+    from fastapi import HTTPException
+
+    from kite_app.main import LiveGttRequest, algo_live_gtt
+
+    monkeypatch.setattr("kite_app.main.desk_is_open", lambda now=None: False)
+    with pytest.raises(HTTPException) as caught:
+        algo_live_gtt(LiveGttRequest(confirm_live=True, orders=[]))
+    assert caught.value.status_code == 403
+    assert caught.value.detail == "Algo orders run on weekdays from 9:00 AM to 4:00 PM IST."
 
 
 def test_desk_is_open_on_weekdays_from_nine_until_four():

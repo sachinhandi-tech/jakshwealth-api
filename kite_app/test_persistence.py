@@ -37,7 +37,6 @@ def databases(tmp_path, monkeypatch):
     monkeypatch.delenv("KITE_SESSION_BUCKET", raising=False)
     monkeypatch.delenv("SCANNER_CACHE_BUCKET", raising=False)
     monkeypatch.delenv("DATABASE_URL", raising=False)
-    monkeypatch.setattr("kite_app.auth_router.desk_is_open", lambda now=None: True)
     reset_for_tests()
     _RECONCILED.clear()
     yield identity, trading
@@ -308,18 +307,16 @@ def test_orders_replay_does_not_duplicate_events(databases):
     assert book.calls == 1
 
 
-def test_closed_desk_login_is_audited(databases, monkeypatch):
-    monkeypatch.setattr("kite_app.auth_router.desk_is_open", lambda now=None: False)
+def test_sign_in_stays_open_outside_algo_hours(databases, monkeypatch):
+    monkeypatch.setattr("kite_app.kite_service.desk_is_open", lambda now=None: False)
+    monkeypatch.setattr("kite_app.auth_router.KiteConnect", _Kite)
     user_id = _user()
-    with pytest.raises(HTTPException) as caught:
-        zerodha_callback(request_token="one-time-request", state=_sign_state(user_id), status="success")
-    assert caught.value.status_code == 403
+    response = zerodha_callback(request_token="one-time-request", state=_sign_state(user_id), status="success")
+    assert response.status_code == 302
     db = identity_session()
     event = db.scalar(select(LoginEvent))
     db.close()
-    assert event is not None
-    assert event.outcome == "desk_closed"
-    assert event.request_id is None
+    assert event.outcome == "completed"
 
 
 def test_request_id_is_stored_on_the_login_event(databases):
