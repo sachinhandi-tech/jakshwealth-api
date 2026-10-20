@@ -24,13 +24,18 @@ class FakeKite:
         return {symbol: {"last_price": "101.5"} for symbol in symbols}
 
 
-def test_equity_universe_is_every_nse_stock(monkeypatch):
+def test_equity_universe_keeps_regular_shares_only(monkeypatch):
     class Instruments:
         def instruments(self, exchange):
             assert exchange == "NSE"
             return [
                 {"exchange": "NSE", "segment": "NSE", "instrument_type": "EQ", "tradingsymbol": "TCS", "name": "Tata", "instrument_token": 2},
                 {"exchange": "NSE", "segment": "NSE", "instrument_type": "EQ", "tradingsymbol": "INFY", "name": "Infosys", "instrument_token": 1},
+                {"exchange": "NSE", "segment": "NSE", "instrument_type": "EQ", "tradingsymbol": "BAJAJ-AUTO", "name": "Bajaj Auto", "instrument_token": 3},
+                {"exchange": "NSE", "segment": "NSE", "instrument_type": "EQ", "tradingsymbol": "RELIANCE-BE", "name": "Reliance", "instrument_token": 4},
+                {"exchange": "NSE", "segment": "NSE", "instrument_type": "EQ", "tradingsymbol": "ACME-SM", "name": "Acme SME", "instrument_token": 5},
+                {"exchange": "NSE", "segment": "NSE", "instrument_type": "EQ", "tradingsymbol": "BOND-GS", "name": "Govt bond", "instrument_token": 6},
+                {"exchange": "NSE", "segment": "NSE", "instrument_type": "EQ", "tradingsymbol": "NIFTYBEES", "name": "Nippon India ETF", "instrument_token": 7},
                 {"exchange": "NSE", "segment": "NSE", "instrument_type": "FUT", "tradingsymbol": "INFY24OCTFUT", "name": "INFY", "instrument_token": 9},
                 {"exchange": "NSE", "segment": "INDICES", "instrument_type": "EQ", "tradingsymbol": "NIFTY 50", "name": "NIFTY", "instrument_token": 8},
             ]
@@ -38,8 +43,8 @@ def test_equity_universe_is_every_nse_stock(monkeypatch):
     monkeypatch.setattr("kite_app.scanner_data._universe_cache", None)
     rows = equity_universe(Instruments())
 
-    assert [row["ticker"] for row in rows] == ["INFY", "TCS"]
-    assert rows[0]["token"] == 1
+    assert [row["ticker"] for row in rows] == ["BAJAJ-AUTO", "INFY", "RELIANCE-BE", "TCS"]
+    assert rows[1]["token"] == 1
 
 
 def test_scanner_payload_caches_candles_without_secrets(monkeypatch, tmp_path):

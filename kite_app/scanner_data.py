@@ -1,7 +1,7 @@
 """Cached daily candles for the desk breakout scanner.
 
-The universe is every NSE equity from Kite. The HTTP body returns only the
-breakout setups; the full candle cache stays on disk or in S3.
+The universe is regular NSE equity. The HTTP body returns only the breakout
+setups; the full candle cache stays on disk or in S3.
 """
 
 from __future__ import annotations
@@ -29,6 +29,20 @@ NIFTY50_CSV_FALLBACK = "https://nsearchives.nseindia.com/content/indices/ind_nif
 CACHE_SECONDS = 6 * 60 * 60
 HISTORY_DAYS = 120
 FILL_BUDGET_SECONDS = 18
+# Series Zerodha appends after a hyphen. These are not the normal equity series.
+_OTHER_SERIES = frozenset({
+    "SM", "ST", "SZ",
+    "GS", "GB", "SG", "TB",
+    "IV", "RR", "RE",
+    "E1", "P1",
+    "MF", "ME", "MT",
+    "ID", "DR", "IT", "IL",
+    "W1", "W2",
+    "Y1", "Y2", "Y3", "Y4", "Y5", "Y6", "Y7", "Y8", "Y9",
+    "Z1", "Z2", "Z3", "Z4", "Z5", "Z6", "Z7", "Z8", "Z9",
+    *(f"N{digit}" for digit in range(10)),
+    *(f"N{letter}" for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ"),
+})
 _universe_cache: tuple[float, list[dict]] | None = None
 
 
@@ -39,8 +53,18 @@ def cache_path() -> Path:
     return DEFAULT_SESSION_PATH.parent / "scanner-data.json"
 
 
+def _regular_equity(symbol: str, company: str) -> bool:
+    """EQ-series shares. Drops SME, debt, bonds, rights, warrants, and ETFs."""
+    name = company.upper()
+    if "ETF" in name or "EXCHANGE TRADED" in name or "GOLD BOND" in name:
+        return False
+    if "-" not in symbol:
+        return True
+    return symbol.rsplit("-", 1)[-1] not in _OTHER_SERIES
+
+
 def equity_universe(kite) -> list[dict]:
-    """Every NSE equity Zerodha lists. This is the Algo Signals universe."""
+    """NSE equity shares. This is the Algo Signals universe."""
     global _universe_cache
     now = time.monotonic()
     if _universe_cache and now - _universe_cache[0] < CACHE_SECONDS:
@@ -63,10 +87,10 @@ def equity_universe(kite) -> list[dict]:
             continue
         symbol = str(instrument.get("tradingsymbol") or "").strip().upper()
         token = instrument.get("instrument_token")
-        if not symbol or symbol in seen or token is None:
+        company = str(instrument.get("name") or symbol).strip() or symbol
+        if not symbol or symbol in seen or token is None or not _regular_equity(symbol, company):
             continue
         seen.add(symbol)
-        company = str(instrument.get("name") or symbol).strip() or symbol
         rows.append({"ticker": symbol, "company": company, "token": int(token)})
     rows.sort(key=lambda row: row["ticker"])
     if not rows:
