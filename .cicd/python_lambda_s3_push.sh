@@ -39,6 +39,25 @@ lambda_source_hash() {
             ! -path './.pytest_cache/*' \
             ! -name '*.zip' \
             -print0 | sort -z | xargs -0 stat -c '%n'
+        # include_paths.txt points at source outside this directory, such as kite_app.
+        # Those files are copied into the zip, so they have to change this hash.
+        if [ -f include_paths.txt ]; then
+            while IFS= read -r rel || [ -n "$rel" ]; do
+                rel="${rel%%$'\r'}"
+                case "$rel" in
+                    ""|\#*) continue ;;
+                esac
+                if [ -d "$rel" ]; then
+                    find "$rel" -type f \
+                        ! -path '*/__pycache__/*' \
+                        ! -path '*/.pytest_cache/*' \
+                        ! -name '*.pyc' \
+                        -print0 | sort -z | xargs -0 -r sha256sum
+                elif [ -f "$rel" ]; then
+                    sha256sum "$rel"
+                fi
+            done < include_paths.txt
+        fi
         sha256sum "${WORKSPACE}/.cicd/lambda_package.sh"
     ) | sha256sum | awk '{print $1}'
 }
