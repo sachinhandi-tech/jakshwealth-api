@@ -55,6 +55,8 @@ pipeline {
                     env.AWS_PROFILE = props.aws_profile ?: 'jakshwealth'
                     env.AWS_REGION = props.aws_region ?: 'ap-south-2'
                     env.DEPLOY_ENV = props.deploy_env ?: 'dev'
+                    env.EC2_HOST = props.ec2_host ?: 'ec2-user@10.42.1.168.ap-south-2.compute.internal'
+                    env.SSH_KEY = props.ec2_ssh_key ?: '/var/lib/jenkins/.ssh/jakshwealth.pem'
                 }
             }
         }
@@ -85,13 +87,14 @@ pipeline {
         stage('Sync and install on EC2') {
             steps {
                 script {
-                    def ec2Host = props.ec2_host ?: 'ec2-user@10.42.1.168.ap-south-2.compute.internal'
-                    def sshKey = props.ec2_ssh_key ?: '/home/jenkins/.ssh/jakshwealth.pem'
-
-                    sh '''
-                        ssh -i "${sshKey}" -o StrictHostKeyChecking=no "${ec2Host}" \
-                            "sudo /usr/local/bin/kite-algo-setup-sync"
-                    '''
+                    jakshAws {
+                        sh '''
+                            EC2_HOST="${EC2_HOST}"
+                            SSH_KEY="${SSH_KEY}"
+                            ssh -i "${SSH_KEY}" -o StrictHostKeyChecking=no "${EC2_HOST}" \
+                                "sudo /usr/local/bin/kite-algo-setup-sync"
+                        '''
+                    }
                 }
             }
         }
