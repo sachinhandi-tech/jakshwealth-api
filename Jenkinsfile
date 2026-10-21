@@ -91,7 +91,7 @@ pipeline {
                             aws ssm send-command \
                                 --instance-ids "${EC2_INSTANCE_ID}" \
                                 --document-name "AWS-RunShellScript" \
-                                --parameters "commands=[\"sudo /usr/local/bin/kite-algo-setup-sync\"]" \
+                                --parameters 'commands=["sudo /usr/local/bin/kite-algo-setup-sync"]' \
                                 --region "${AWS_REGION}"
                         '''
                     }
