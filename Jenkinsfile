@@ -55,7 +55,29 @@ pipeline {
                     env.AWS_PROFILE = props.aws_profile ?: 'jakshwealth'
                     env.AWS_REGION = props.aws_region ?: 'ap-south-2'
                     env.DEPLOY_ENV = props.deploy_env ?: 'dev'
-                    env.EC2_INSTANCE_ID = props.ec2_instance_id ?: 'i-05f19a7ffb523f876'
+                }
+            }
+        }
+
+        stage('Fetch EC2 instance from ASG') {
+            steps {
+                script {
+                    jakshAws {
+                        env.EC2_INSTANCE_ID = sh(
+                            script: '''
+                                aws autoscaling describe-auto-scaling-groups \
+                                    --auto-scaling-group-names kite-algo-setup \
+                                    --region "${AWS_REGION}" \
+                                    --query 'AutoScalingGroups[0].Instances[0].InstanceId' \
+                                    --output text
+                            ''',
+                            returnStdout: true
+                        ).trim()
+                        if (!env.EC2_INSTANCE_ID || env.EC2_INSTANCE_ID == 'None' || env.EC2_INSTANCE_ID == 'null') {
+                            error("Failed to fetch EC2 instance ID from ASG kite-algo-setup")
+                        }
+                        echo "Using EC2 instance: ${env.EC2_INSTANCE_ID}"
+                    }
                 }
             }
         }
