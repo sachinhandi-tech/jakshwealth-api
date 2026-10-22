@@ -111,7 +111,7 @@ def _bar_chart_payload(
     *,
     chart_id: str,
     labels: list[str],
-    data: list[int] | list[list[int]],
+    data: Union[list[int], list[list[int]]],
 ) -> dict[str, Any]:
     return {
         "chartId": chart_id,
