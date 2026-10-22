@@ -10,7 +10,7 @@ case "${AWS_REGION}" in
   *)          REGION_SUFFIX="${AWS_REGION//-/}" ;;
 esac
 BUCKET="jakshwealth-artifacts-${ENV}-${REGION_SUFFIX}"
-KEY="kite-algo-setup/api.zip"
+KEY="kite-algo-setup/jakshwealth-api.zip"
 STAGE="$(mktemp -d)"
 trap 'rm -rf "${STAGE}"' EXIT
 
@@ -22,7 +22,7 @@ cp -a "${WORKSPACE}/lambda/jw_secure_data" "${STAGE}/lambda/jw_secure_data"
 find "${STAGE}" -type d \( -name tests -o -name __pycache__ -o -name .pytest_cache -o -name package -o -name tf-virtual-env \) -prune -exec rm -rf {} +
 find "${STAGE}" -type f \( -name '*.zip' -o -name '*.pyc' \) -delete
 
-ARCHIVE="${STAGE}/api.zip"
+ARCHIVE="${STAGE}/jakshwealth-api.zip"
 (
   cd "${STAGE}"
   zip -qr "${ARCHIVE}" kite_app ec2_host lambda
