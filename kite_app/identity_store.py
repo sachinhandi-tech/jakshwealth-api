@@ -31,7 +31,7 @@ def record_login(
     *,
     source: str,
     outcome: str,
-    platform_user_id: uuid.Optional[UUID],
+    platform_user_id: Optional[uuid.UUID],
     api_key: str,
     session: Optional[dict],
 ) -> uuid.UUID:
@@ -95,7 +95,7 @@ def has_active_user() -> bool:
         db.close()
 
 
-def open_first_user(email: str) -> uuid.Optional[UUID]:
+def open_first_user(email: str) -> Optional[uuid.UUID]:
     """Insert the first platform user. Returns None when an account already exists."""
     text_email = email.strip()
     if not text_email:
@@ -127,7 +127,7 @@ def list_active_users() -> list[dict]:
         db.close()
 
 
-def current_desk_session(platform_user_id: uuid.Optional[UUID] = None) -> Optional[dict]:
+def current_desk_session(platform_user_id: Optional[uuid.UUID] = None) -> Optional[dict]:
     """Session for this platform user whose token_date is today in Asia/Kolkata."""
     if platform_user_id is None:
         return None
@@ -162,7 +162,7 @@ def current_desk_session(platform_user_id: uuid.Optional[UUID] = None) -> Option
         db.close()
 
 
-def invalidate_current_sessions(platform_user_id: uuid.Optional[UUID] = None) -> None:
+def invalidate_current_sessions(platform_user_id: Optional[uuid.UUID] = None) -> None:
     """UPDATE the current row so token_date is before today. Login events stay."""
     if platform_user_id is None:
         return

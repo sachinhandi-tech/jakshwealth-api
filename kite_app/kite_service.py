@@ -61,7 +61,7 @@ class KiteService:
             "platform_user_id": None if record.get("platform_user_id") is None else str(record.get("platform_user_id")),
         }
 
-    def login(self, request_token: str, platform_user_id: uuid.Optional[UUID]) -> dict:
+    def login(self, request_token: str, platform_user_id: Optional[uuid.UUID]) -> dict:
         from kite_app.identity_store import active_user, record_login
         from kite_app.models import load_platform_config
 
@@ -298,7 +298,7 @@ class KiteService:
             self.logout()
 
 
-def _platform_user_id(value: Optional[str]) -> uuid.Optional[UUID]:
+def _platform_user_id(value: Optional[str]) -> Optional[uuid.UUID]:
     if not value:
         return None
     try:

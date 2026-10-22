@@ -62,7 +62,7 @@ async def bind_request_context(request: Request, call_next):
 class LoginRequest(BaseModel):
     api_key: str = Field(min_length=1)
     request_token: str = Field(min_length=1)
-    platform_user_id: uuid.Optional[UUID] = None
+    platform_user_id: Optional[uuid.UUID] = None
 
 
 class SessionStatus(BaseModel):

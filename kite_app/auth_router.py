@@ -25,7 +25,7 @@ _STATE_TTL_SECONDS = 600
 
 
 @router.get("/auth/zerodha/login")
-def zerodha_login(platform_user_id: uuid.Optional[UUID] = Query(default=None)) -> RedirectResponse:
+def zerodha_login(platform_user_id: Optional[uuid.UUID] = Query(default=None)) -> RedirectResponse:
     """Send the browser to Zerodha. The first sign-in opens the account."""
     if platform_user_id is None:
         if has_active_user():
@@ -157,7 +157,7 @@ def _sign_desk_state() -> str:
     return f"{payload}.{_mac(payload)}"
 
 
-def _read_state(state: str) -> uuid.Optional[UUID]:
+def _read_state(state: str) -> Optional[uuid.UUID]:
     parts = state.split(".")
     if len(parts) != 3:
         raise HTTPException(status_code=400, detail="Zerodha login state is invalid")

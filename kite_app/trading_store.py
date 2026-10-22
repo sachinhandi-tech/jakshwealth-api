@@ -86,7 +86,7 @@ def record_gtt_attempt(
     row: dict,
     confirm_live: Optional[bool],
     kite_error_text: Optional[str] = None,
-) -> uuid.Optional[UUID]:
+) -> Optional[uuid.UUID]:
     if not _enabled():
         return None
     attempt_id = uuid.uuid4()
