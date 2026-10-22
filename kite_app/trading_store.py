@@ -84,9 +84,9 @@ def record_gtt_attempt(
     platform_user_id,
     zerodha_user_id,
     row: dict,
-    confirm_live: bool | None,
-    kite_error_text: str | None = None,
-) -> uuid.UUID | None:
+    confirm_live: Optional[bool],
+    kite_error_text: Optional[str] = None,
+) -> uuid.Optional[UUID]:
     if not _enabled():
         return None
     attempt_id = uuid.uuid4()
@@ -120,7 +120,7 @@ def record_gtt_attempt(
     return attempt_id
 
 
-def record_order_command(*, action: str, parameters: dict, order_id: str | None, http_failure_body: str | None, platform_user_id=None, zerodha_user_id=None) -> uuid.UUID:
+def record_order_command(*, action: str, parameters: dict, order_id: Optional[str], http_failure_body: Optional[str], platform_user_id=None, zerodha_user_id=None) -> uuid.UUID:
     """Store a place, modify, or cancel request. The order is not marked complete here."""
     command_id = uuid.uuid4()
     db = trading_session()
@@ -153,7 +153,7 @@ def record_order_command(*, action: str, parameters: dict, order_id: str | None,
     return command_id
 
 
-def insert_order_event(source: str, payload: dict, *, platform_user_id=None, checksum_valid: bool | None, raw: dict | None) -> bool:
+def insert_order_event(source: str, payload: dict, *, platform_user_id=None, checksum_valid: Optional[bool], raw: Optional[dict]) -> bool:
     if source not in _SOURCES:
         return False
     values = {name: _text(payload.get(name)) for name in _ORDER_FIELDS}
@@ -320,7 +320,7 @@ def _eq(column, value):
     return column == value
 
 
-def _text(value) -> str | None:
+def _text(value) -> Optional[str]:
     if value is None or isinstance(value, bool):
         if isinstance(value, bool):
             return "true" if value else "false"

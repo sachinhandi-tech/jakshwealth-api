@@ -99,7 +99,7 @@ def equity_universe(kite) -> list[dict]:
     return rows
 
 
-def build_scanner_payload(kite, budget_seconds: float | None = None) -> dict:
+def build_scanner_payload(kite, budget_seconds: Optional[float] = None) -> dict:
     """Return the saved candle cache, filling any missing NSE symbols until the time budget."""
     if budget_seconds is None:
         budget_seconds = float(os.environ.get("SCANNER_FILL_BUDGET_SECONDS", str(FILL_BUDGET_SECONDS)))
@@ -261,7 +261,7 @@ def _within_ttl(payload: dict) -> bool:
     return age.total_seconds() <= CACHE_SECONDS
 
 
-def _read_cache() -> dict | None:
+def _read_cache() -> Optional[dict]:
     path = cache_path()
     if path.is_file():
         try:
@@ -288,7 +288,7 @@ def _cache_key() -> str:
     return os.environ.get("SCANNER_CACHE_KEY", "kite-scanner/scanner-data.json").strip() or "kite-scanner/scanner-data.json"
 
 
-def _read_s3_cache() -> dict | None:
+def _read_s3_cache() -> Optional[dict]:
     bucket = _cache_bucket()
     if not bucket:
         return None
@@ -321,7 +321,7 @@ def _write_s3_cache(payload: dict) -> None:
         return
 
 
-def _candle_row(raw: dict) -> dict | None:
+def _candle_row(raw: dict) -> Optional[dict]:
     try:
         value = raw.get("date")
         if isinstance(value, datetime):

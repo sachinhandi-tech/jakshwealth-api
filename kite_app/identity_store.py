@@ -16,7 +16,7 @@ from kite_app.session_manager import encrypt_access_token, today_ist
 logger = logging.getLogger("kite_app.identity")
 
 
-def active_user(platform_user_id: uuid.UUID) -> IdentityUser | None:
+def active_user(platform_user_id: uuid.UUID) -> Optional[IdentityUser]:
     db = identity_session()
     try:
         user = db.get(IdentityUser, platform_user_id)
@@ -31,9 +31,9 @@ def record_login(
     *,
     source: str,
     outcome: str,
-    platform_user_id: uuid.UUID | None,
+    platform_user_id: uuid.Optional[UUID],
     api_key: str,
-    session: dict | None,
+    session: Optional[dict],
 ) -> uuid.UUID:
     """Insert one login_events row. A completed exchange also replaces the session ciphertext."""
     event_id = uuid.uuid4()
@@ -95,7 +95,7 @@ def has_active_user() -> bool:
         db.close()
 
 
-def open_first_user(email: str) -> uuid.UUID | None:
+def open_first_user(email: str) -> uuid.Optional[UUID]:
     """Insert the first platform user. Returns None when an account already exists."""
     text_email = email.strip()
     if not text_email:
@@ -127,7 +127,7 @@ def list_active_users() -> list[dict]:
         db.close()
 
 
-def current_desk_session(platform_user_id: uuid.UUID | None = None) -> dict | None:
+def current_desk_session(platform_user_id: uuid.Optional[UUID] = None) -> Optional[dict]:
     """Session for this platform user whose token_date is today in Asia/Kolkata."""
     if platform_user_id is None:
         return None
@@ -162,7 +162,7 @@ def current_desk_session(platform_user_id: uuid.UUID | None = None) -> dict | No
         db.close()
 
 
-def invalidate_current_sessions(platform_user_id: uuid.UUID | None = None) -> None:
+def invalidate_current_sessions(platform_user_id: uuid.Optional[UUID] = None) -> None:
     """UPDATE the current row so token_date is before today. Login events stay."""
     if platform_user_id is None:
         return
@@ -215,13 +215,13 @@ def _replace_session(db, platform_user_id, zerodha_user_id, access_token, public
     row.updated_at = now
 
 
-def _api_key_mark(api_key: str) -> tuple[str | None, str | None]:
+def _api_key_mark(api_key: str) -> tuple[Optional[str], Optional[str]]:
     if not api_key:
         return None, None
     return api_key[-4:], hashlib.sha256(api_key.encode("utf-8")).hexdigest()
 
 
-def _text(value) -> str | None:
+def _text(value) -> Optional[str]:
     if value is None:
         return None
     text = str(value).strip()

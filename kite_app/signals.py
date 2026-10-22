@@ -28,8 +28,8 @@ class SignalScanError(Exception):
 MA_TYPES = ("sma", "ema", "wma")
 
 
-def simple_moving_average(closes: list[float], window: int) -> list[float | None]:
-    averages: list[float | None] = [None] * len(closes)
+def simple_moving_average(closes: list[float], window: int) -> list[Optional[float]]:
+    averages: list[Optional[float]] = [None] * len(closes)
     if window <= 0:
         return averages
     running = 0.0
@@ -42,9 +42,9 @@ def simple_moving_average(closes: list[float], window: int) -> list[float | None
     return averages
 
 
-def exponential_moving_average(closes: list[float], window: int) -> list[float | None]:
+def exponential_moving_average(closes: list[float], window: int) -> list[Optional[float]]:
     """EMA seeded with the first SMA. The smoothing factor is 2 / (window + 1)."""
-    averages: list[float | None] = [None] * len(closes)
+    averages: list[Optional[float]] = [None] * len(closes)
     if window <= 0 or len(closes) < window:
         return averages
     seed = sum(closes[:window]) / window
@@ -57,9 +57,9 @@ def exponential_moving_average(closes: list[float], window: int) -> list[float |
     return averages
 
 
-def weighted_moving_average(closes: list[float], window: int) -> list[float | None]:
+def weighted_moving_average(closes: list[float], window: int) -> list[Optional[float]]:
     """WMA gives the newest close weight `window` and the oldest close weight 1."""
-    averages: list[float | None] = [None] * len(closes)
+    averages: list[Optional[float]] = [None] * len(closes)
     if window <= 0:
         return averages
     weight_total = window * (window + 1) / 2
@@ -72,7 +72,7 @@ def weighted_moving_average(closes: list[float], window: int) -> list[float | No
     return averages
 
 
-def moving_average(closes: list[float], window: int, ma_type: str) -> list[float | None]:
+def moving_average(closes: list[float], window: int, ma_type: str) -> list[Optional[float]]:
     if ma_type == "ema":
         return exponential_moving_average(closes, window)
     if ma_type == "wma":
@@ -86,10 +86,10 @@ def latest_crossover(
     long_window: int,
     lookback_days: int,
     ma_type: str = "sma",
-    short_type: str | None = None,
-    long_type: str | None = None,
+    short_type: Optional[str] = None,
+    long_type: Optional[str] = None,
     trend_window: int = 0,
-) -> dict | None:
+) -> Optional[dict]:
     """Return the newest cross of the fast average over the slow average."""
     fast_type = short_type or ma_type
     slow_type = long_type or ma_type
@@ -122,7 +122,7 @@ def latest_crossover(
     return found
 
 
-def latest_price_cross(candles: list[dict], window: int, lookback_days: int) -> dict | None:
+def latest_price_cross(candles: list[dict], window: int, lookback_days: int) -> Optional[dict]:
     """Return the newest cross of the daily close through an SMA."""
     if window < 2 or lookback_days < 1 or len(candles) < window + 1:
         return None
@@ -154,7 +154,7 @@ def _row(
     crossover_type: str,
     fast_value: float,
     slow_value: float,
-    trend_line: list[float | None] | None,
+    trend_line: list[Optional[float]] | None,
 ) -> dict:
     trend_value = trend_line[index] if trend_line else None
     if trend_value is None:
@@ -197,11 +197,11 @@ def scan_nifty100(
     lookback_days: int,
     max_stocks: int,
     ma_type: str = "sma",
-    short_type: str | None = None,
-    long_type: str | None = None,
+    short_type: Optional[str] = None,
+    long_type: Optional[str] = None,
     trend_window: int = 0,
     scan_mode: str = "crossover",
-    budget_seconds: float | None = None,
+    budget_seconds: Optional[float] = None,
 ) -> dict:
     deadline = time.monotonic() + (SCAN_BUDGET_SECONDS if budget_seconds is None else budget_seconds)
     constituents = load_nifty100()

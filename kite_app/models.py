@@ -11,7 +11,7 @@ from sqlalchemy import Boolean, Date, DateTime, ForeignKey, String, Text, create
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 from typing import Optional
 
-_SESSIONMAKER: sessionmaker | None = None
+_SESSIONMAKER: Optional[sessionmaker] = None
 
 
 class Base(DeclarativeBase):

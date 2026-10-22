@@ -21,13 +21,13 @@ SESSION_FIELDS = ("api_key", "access_token", "user_id", "user_name", "saved_at")
 
 
 class SessionStore:
-    def __init__(self, path: Path | None = None) -> None:
+    def __init__(self, path: Optional[Path] = None) -> None:
         self.path = path or Path(
             os.environ.get("KITE_SESSION_PATH")
             or (Path(__file__).resolve().parent.parent / ".kite" / "session.json")
         )
 
-    def load(self) -> dict | None:
+    def load(self) -> Optional[dict]:
         state, remote = _read_s3()
         if state == "ok" and remote is not None:
             self._write_local(remote)
@@ -55,7 +55,7 @@ class SessionStore:
         except FileNotFoundError:
             return
 
-    def _read_local(self) -> dict | None:
+    def _read_local(self) -> Optional[dict]:
         if not self.path.is_file():
             return None
         try:
@@ -71,7 +71,7 @@ class SessionStore:
         os.replace(temporary, self.path)
 
 
-def _session_record(data) -> dict | None:
+def _session_record(data) -> Optional[dict]:
     if not isinstance(data, dict):
         return None
     api_key = str(data.get("api_key") or "").strip()
@@ -89,7 +89,7 @@ def _session_key() -> str:
     return os.environ.get("KITE_SESSION_KEY", "kite-session/session.json").strip() or "kite-session/session.json"
 
 
-def _read_s3() -> tuple[str, dict | None]:
+def _read_s3() -> tuple[str, Optional[dict]]:
     bucket = _session_bucket()
     if not bucket:
         return "absent", None

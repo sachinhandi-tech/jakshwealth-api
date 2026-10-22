@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from typing import Literal
+from typing import Literal, Optional
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -62,14 +62,14 @@ async def bind_request_context(request: Request, call_next):
 class LoginRequest(BaseModel):
     api_key: str = Field(min_length=1)
     request_token: str = Field(min_length=1)
-    platform_user_id: uuid.UUID | None = None
+    platform_user_id: uuid.Optional[UUID] = None
 
 
 class SessionStatus(BaseModel):
     authenticated: bool
-    user_name: str | None = None
-    user_id: str | None = None
-    platform_user_id: str | None = None
+    user_name: Optional[str] = None
+    user_id: Optional[str] = None
+    platform_user_id: Optional[str] = None
 
 
 class ProfileResponse(BaseModel):
@@ -100,7 +100,7 @@ class SignalRow(BaseModel):
     close: float
     short_sma: float
     long_sma: float
-    trend_sma: float | None = None
+    trend_sma: Optional[float] = None
     trend_bias: Literal["above", "below"] | None = None
 
 
@@ -124,25 +124,25 @@ class AlgoSignal(BaseModel):
     symbol: str
     transaction_type: str
     entry_price: float
-    stop_loss: float | None = None
-    target: float | None = None
+    stop_loss: Optional[float] = None
+    target: Optional[float] = None
     source: str = "algo"
 
 
 class QuoteRow(BaseModel):
     symbol: str
     exchange: str
-    last_price: float | None = None
-    change_percent: float | None = None
-    volume: int | None = None
+    last_price: Optional[float] = None
+    change_percent: Optional[float] = None
+    volume: Optional[int] = None
 
 
 class GttOrderIn(BaseModel):
     symbol: str
     quantity: int = 1
-    buy_price: float | None = None
-    stoploss: float | None = None
-    last_price: float | None = None
+    buy_price: Optional[float] = None
+    stoploss: Optional[float] = None
+    last_price: Optional[float] = None
 
 
 class GttStateRequest(BaseModel):
@@ -150,7 +150,7 @@ class GttStateRequest(BaseModel):
 
 
 class LiveGttRequest(BaseModel):
-    confirm_live: bool | None = None
+    confirm_live: Optional[bool] = None
     orders: list[GttOrderIn] = Field(default_factory=list)
 
 

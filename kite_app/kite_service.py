@@ -44,9 +44,9 @@ def extract_request_token(raw: str) -> str:
 
 
 class KiteService:
-    def __init__(self, store: SessionStore | None = None) -> None:
+    def __init__(self, store: Optional[SessionStore] = None) -> None:
         self.store = store or SessionStore()
-        self._client: KiteConnect | None = None
+        self._client: Optional[KiteConnect] = None
         self._client_key: tuple[str, str] | None = None
         self._profile_cache: tuple[float, dict] | None = None
 
@@ -61,7 +61,7 @@ class KiteService:
             "platform_user_id": None if record.get("platform_user_id") is None else str(record.get("platform_user_id")),
         }
 
-    def login(self, request_token: str, platform_user_id: uuid.UUID | None) -> dict:
+    def login(self, request_token: str, platform_user_id: uuid.Optional[UUID]) -> dict:
         from kite_app.identity_store import active_user, record_login
         from kite_app.models import load_platform_config
 
@@ -199,8 +199,8 @@ class KiteService:
         lookback_days: int,
         max_stocks: int,
         ma_type: str = "sma",
-        short_type: str | None = None,
-        long_type: str | None = None,
+        short_type: Optional[str] = None,
+        long_type: Optional[str] = None,
         trend_window: int = 0,
         scan_mode: str = "crossover",
     ) -> dict:
@@ -222,8 +222,8 @@ class KiteService:
         lookback_days: int,
         max_stocks: int,
         ma_type: str = "sma",
-        short_type: str | None = None,
-        long_type: str | None = None,
+        short_type: Optional[str] = None,
+        long_type: Optional[str] = None,
         trend_window: int = 0,
         scan_mode: str = "crossover",
     ) -> dict:
@@ -256,7 +256,7 @@ class KiteService:
             "scan_mode": scan_mode,
         }
 
-    def saved_session(self) -> dict | None:
+    def saved_session(self) -> Optional[dict]:
         from kite_app.identity_store import current_desk_session
         from kite_app.request_context import platform_user_var
 
@@ -298,7 +298,7 @@ class KiteService:
             self.logout()
 
 
-def _platform_user_id(value: str | None) -> uuid.UUID | None:
+def _platform_user_id(value: Optional[str]) -> uuid.Optional[UUID]:
     if not value:
         return None
     try:
@@ -307,7 +307,7 @@ def _platform_user_id(value: str | None) -> uuid.UUID | None:
         return None
 
 
-def access_token_expired(saved_at, now: datetime | None = None) -> bool:
+def access_token_expired(saved_at, now: Optional[datetime] = None) -> bool:
     """Zerodha access tokens stop working at the next 6:00 AM IST. There is no refresh token."""
     text = str(saved_at or "").strip()
     if not text:
@@ -347,14 +347,14 @@ def _safe_kite_message(exc: KiteException) -> str:
     return message or "Zerodha rejected the request."
 
 
-def _as_int(value) -> int | None:
+def _as_int(value) -> Optional[int]:
     number = _as_float(value)
     if number is None:
         return None
     return int(number)
 
 
-def _as_float(value) -> float | None:
+def _as_float(value) -> Optional[float]:
     if value is None:
         return None
     try:

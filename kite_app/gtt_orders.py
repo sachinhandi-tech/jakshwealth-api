@@ -41,7 +41,7 @@ def gtt_state(kite, orders: list[dict]) -> list[dict]:
     return [_evaluate(kite, order, account, create=False) for order in orders]
 
 
-def live_gtt(kite, orders: list[dict], confirm_live: bool | None, platform_user_id=None, zerodha_user_id=None) -> list[dict]:
+def live_gtt(kite, orders: list[dict], confirm_live: Optional[bool], platform_user_id=None, zerodha_user_id=None) -> list[dict]:
     if confirm_live is not True:
         rejected = []
         for order in orders:
@@ -189,7 +189,7 @@ def round_to_tick(price: Decimal, tick: Decimal) -> Decimal:
     return (steps * tick).quantize(tick)
 
 
-def _block_reason(symbol: str, buy_price: Decimal, account: dict) -> dict | None:
+def _block_reason(symbol: str, buy_price: Decimal, account: dict) -> Optional[dict]:
     recent = _recent_id(symbol)
     if recent is not None:
         return {
@@ -297,7 +297,7 @@ def _sell_gtts(gtts: list) -> dict[str, str]:
     return found
 
 
-def _trigger_match(gtts: list, symbol: str, buy_price: Decimal) -> str | None:
+def _trigger_match(gtts: list, symbol: str, buy_price: Decimal) -> Optional[str]:
     for item in gtts:
         parsed = _gtt(item)
         if parsed is None or parsed["symbol"] != symbol:
@@ -307,7 +307,7 @@ def _trigger_match(gtts: list, symbol: str, buy_price: Decimal) -> str | None:
     return None
 
 
-def _gtt(item: dict) -> dict | None:
+def _gtt(item: dict) -> Optional[dict]:
     if not isinstance(item, dict) or str(item.get("status") or "").lower() != "active":
         return None
     condition = item.get("condition") or {}
@@ -371,7 +371,7 @@ def _open_quantities(positions, holdings: list) -> dict[str, int]:
     return quantities
 
 
-def _blank(symbol: str, last_price: Decimal | None) -> dict:
+def _blank(symbol: str, last_price: Optional[Decimal]) -> dict:
     return {
         "symbol": symbol,
         "quantity": 1,
@@ -393,12 +393,12 @@ def _blank(symbol: str, last_price: Decimal | None) -> dict:
     }
 
 
-def _recent_id(symbol: str) -> str | None:
+def _recent_id(symbol: str) -> Optional[str]:
     with _LOCK:
         return _recent_unlocked(symbol)
 
 
-def _recent_unlocked(symbol: str) -> str | None:
+def _recent_unlocked(symbol: str) -> Optional[str]:
     found = _RECENT.get(symbol)
     if found is None:
         return None
@@ -437,7 +437,7 @@ def _is_today(value, today) -> bool:
     return len(text) >= 10 and text[:10] == today.isoformat()
 
 
-def _optional_decimal(value) -> Decimal | None:
+def _optional_decimal(value) -> Optional[Decimal]:
     if value is None or value == "":
         return None
     try:

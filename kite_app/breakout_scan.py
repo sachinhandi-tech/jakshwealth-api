@@ -71,7 +71,7 @@ def self_test_fixture() -> list[dict]:
     return [triggered, quiet]
 
 
-def _scan_stock(stock: dict) -> dict | None:
+def _scan_stock(stock: dict) -> Optional[dict]:
     candles = stock["candles"]
     if len(candles) < PRICE_LOOKBACK + 5:
         return None
@@ -84,7 +84,7 @@ def _scan_stock(stock: dict) -> dict | None:
     return None
 
 
-def _accept_breakout(stock: dict, candles: list[dict], index: int) -> dict | None:
+def _accept_breakout(stock: dict, candles: list[dict], index: int) -> Optional[dict]:
     candidate = candles[index]
     volume_window = candles[index - VOLUME_LOOKBACK:index]
     price_window = candles[index - PRICE_LOOKBACK:index]
@@ -167,7 +167,7 @@ def _candle(index: int, open_price: float = 100, high: float = 101, low: float =
     }
 
 
-def _format_date(value) -> str | None:
+def _format_date(value) -> Optional[str]:
     if isinstance(value, datetime):
         return value.date().isoformat()
     if isinstance(value, date):

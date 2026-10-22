@@ -13,9 +13,9 @@ from sqlalchemy.orm import Session, sessionmaker
 
 _LOCK = threading.Lock()
 _READY = False
-_IDENTITY: sessionmaker | None = None
-_TRADING: sessionmaker | None = None
-_ADMIN: sessionmaker | None = None
+_IDENTITY: Optional[sessionmaker] = None
+_TRADING: Optional[sessionmaker] = None
+_ADMIN: Optional[sessionmaker] = None
 _ROOT = Path(__file__).resolve().parent
 
 

@@ -43,7 +43,7 @@ def enqueue_scan(record: dict, params: dict) -> str:
     return job_id
 
 
-def read_scan(job_id: str) -> dict | None:
+def read_scan(job_id: str) -> Optional[dict]:
     """Return status and, when finished, the scan. Credentials are never included."""
     row = _load(job_id)
     if row is None:
@@ -139,7 +139,7 @@ def _save_new(job_id: str, params: dict, blob: str) -> None:
         db.close()
 
 
-def _load(job_id: str) -> dict | None:
+def _load(job_id: str) -> Optional[dict]:
     if not _use_database():
         row = _MEMORY.get(job_id)
         return dict(row) if row else None
@@ -159,7 +159,7 @@ def _load(job_id: str) -> dict | None:
         db.close()
 
 
-def _finish(job_id: str, status: str, result_json: str | None, error: str | None) -> None:
+def _finish(job_id: str, status: str, result_json: Optional[str], error: Optional[str]) -> None:
     if not _use_database():
         row = _MEMORY.get(job_id)
         if row is None:
