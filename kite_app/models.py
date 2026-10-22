@@ -9,6 +9,7 @@ from datetime import date, datetime
 
 from sqlalchemy import Boolean, Date, DateTime, ForeignKey, String, Text, create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
+from typing import Optional
 
 _SESSIONMAKER: sessionmaker | None = None
 
@@ -36,8 +37,8 @@ class SignalScanJob(Base):
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     request_json: Mapped[str] = mapped_column(Text, nullable=False)
     credential_blob: Mapped[str] = mapped_column(Text, nullable=False)
-    result_json: Mapped[str | None] = mapped_column(Text, nullable=True)
-    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    result_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
