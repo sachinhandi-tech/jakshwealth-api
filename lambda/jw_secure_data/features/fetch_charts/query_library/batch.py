@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
-from typing import Any
+from typing import Any Optional
 
 from features.fetch_charts.models import ChartQueryContext
 from features.fetch_charts.query_library.builder import build_chart_query
 from features.fetch_charts.query_library.queries import _default_query
 
-_TRAILING_ORDER_BY = re.compile(r"\s+ORDER\s+BY\s+.+$", re.IGNORECASE | re.DOTALL)
+_TRAILING_ORDER_BY = re.compile(r"\s+ORDER\s+BY\s+.+$", re.Union[IGNORECASE, re].DOTALL)
 
 
 def _sql_literal(value: str) -> str:

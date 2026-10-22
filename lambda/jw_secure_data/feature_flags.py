@@ -39,7 +39,7 @@ def can_manage_ai_chat() -> bool:
     return is_ai_chat_platform_enabled()
 
 
-def _parse_json_mapping(raw: str | None, label: str) -> dict[str, bool]:
+def _parse_json_mapping(raw: Optional[str], label: str) -> dict[str, bool]:
     if not raw:
         return {}
     try:
@@ -59,7 +59,7 @@ def _base_flags_from_env() -> dict[str, bool]:
     return _parse_json_mapping(os.environ.get("JW_FEATURE_FLAGS"), "JW_FEATURE_FLAGS")
 
 
-def _override_file_path() -> Path | None:
+def _override_file_path() -> Optional[Path]:
     configured = (os.environ.get("FEATURE_FLAGS_OVERRIDE_FILE") or "").strip()
     if configured:
         return Path(configured)

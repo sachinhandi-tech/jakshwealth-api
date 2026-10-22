@@ -96,7 +96,7 @@ def _reset_thread_connection() -> None:
             pass
 
 
-def _execute_query(connection, query: str, params: list[Any] | tuple[Any, ...] | None) -> list[dict]:
+def _execute_query(connection, query: str, params: Union[list[Any], tuple[Any, ...], None]) -> list[dict]:
     with connection.cursor() as cursor:
         if params:
             cursor.execute(query, tuple(params))
@@ -108,7 +108,7 @@ def _execute_query(connection, query: str, params: list[Any] | tuple[Any, ...] |
         return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
 
-def fetch_rows(query: str, params: list[Any] | tuple[Any, ...] | None = None) -> list[dict]:
+def fetch_rows(query: str, params: Union[list[Any], tuple[Any, ...], None] = None) -> list[dict]:
     settings = _connection_settings()
     hostname = settings["server_hostname"]
 
@@ -132,7 +132,7 @@ def fetch_rows(query: str, params: list[Any] | tuple[Any, ...] | None = None) ->
     )
 
 
-def fetch_rows_with_params(query: str, params: list[Any] | tuple[Any, ...]) -> list[dict]:
+def fetch_rows_with_params(query: str, params: Union[list[Any], tuple[Any, ...]]) -> list[dict]:
     """Execute a parameterized warehouse query."""
     return fetch_rows(query, params=params)
 

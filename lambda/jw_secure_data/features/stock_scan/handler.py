@@ -44,7 +44,7 @@ def _handle_job_status(event, trace: RequestTrace, authorizer: dict[str, Any], m
     return trace.complete(responses.ok(job))
 
 
-def _query_param(event: dict, name: str) -> str | None:
+def _query_param(event: dict, name: str) -> Optional[str]:
     params = (event or {}).get("queryStringParameters") or {}
     value = params.get(name)
     if value is None:

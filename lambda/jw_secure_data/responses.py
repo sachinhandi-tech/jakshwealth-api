@@ -1,6 +1,7 @@
 """API Gateway (proxy integration) HTTP response builders."""
 
 from __future__ import annotations
+from typing import Optional, Union
 
 import json
 from http import HTTPStatus
@@ -28,7 +29,7 @@ def ok(body) -> dict:
     return _response(HTTPStatus.OK, body)
 
 
-def bad_request(message: str | dict) -> dict:
+def bad_request(message: Union[str, dict]) -> dict:
     body = message if isinstance(message, dict) else {"message": message}
     return _response(HTTPStatus.BAD_REQUEST, body)
 
@@ -37,7 +38,7 @@ def method_not_allowed(message: str) -> dict:
     return _response(HTTPStatus.METHOD_NOT_ALLOWED, {"message": message})
 
 
-def not_found(message: str | dict) -> dict:
+def not_found(message: Union[str, dict]) -> dict:
     body = message if isinstance(message, dict) else {"message": message}
     return _response(HTTPStatus.NOT_FOUND, body)
 

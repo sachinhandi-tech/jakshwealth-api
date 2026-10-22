@@ -1,3 +1,4 @@
+from typing import Optional, Union
 import json
 
 from features.stock_scan import async_service, job_store, service
@@ -14,7 +15,7 @@ def test_async_job_lifecycle_local(monkeypatch, tmp_path):
 
     enqueued: list[str] = []
 
-    def fake_enqueue(job_id: str, *, function_name: str | None = None) -> None:
+    def fake_enqueue(job_id: str, *, function_name: Optional[str] = None) -> None:
         enqueued.append(job_id)
         async_service.execute_job(job_id)
 

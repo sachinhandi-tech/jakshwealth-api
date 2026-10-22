@@ -34,7 +34,7 @@ def load_response_templates() -> dict[str, Any]:
     return payload
 
 
-def build_prompt_context(datamap: dict[str, Any] | None = None) -> LlmPromptContext:
+def build_prompt_context(datamap: Optional[dict[str, Any]] = None) -> LlmPromptContext:
     return LlmPromptContext(
         datamap=datamap or load_datamap(),
         dsl_examples=load_dsl_examples(),

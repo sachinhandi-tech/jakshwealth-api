@@ -46,9 +46,9 @@ class ExternalServiceError(RuntimeError):
         dep: str,
         op: str,
         message: str,
-        code: str | None = None,
-        hint: str | None = None,
-        reason: str | None = None,
+        code: Optional[str] = None,
+        hint: Optional[str] = None,
+        reason: Optional[str] = None,
     ) -> None:
         self.dep = dep
         self.op = op
@@ -210,7 +210,7 @@ def _truthy(value: Any) -> bool:
     return str(value or "").strip().lower() in ("1", "true", "yes")
 
 
-def _operation(event: dict) -> str | None:
+def _operation(event: dict) -> Optional[str]:
     method = event.get("httpMethod")
     if method == "OPTIONS":
         return "options"
@@ -263,7 +263,7 @@ def _response_fields(response: dict) -> dict[str, Any]:
 class Request:
     """Per-invocation log context: one begin line, one end/fail line."""
 
-    def __init__(self, service: str, event: dict | None, context: Any) -> None:
+    def __init__(self, service: str, event: Optional[dict], context: Any) -> None:
         self._service = service
         self._event = event or {}
         self._started = time.perf_counter()

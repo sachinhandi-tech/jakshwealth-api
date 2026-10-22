@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from typing import Literal, Optional
+from typing import Literal, Optional, Union
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -101,7 +101,7 @@ class SignalRow(BaseModel):
     short_sma: float
     long_sma: float
     trend_sma: Optional[float] = None
-    trend_bias: Literal["above", "below"] | None = None
+    trend_bias: Optional[Literal["above", "below"]] = None
 
 
 class SignalResponse(BaseModel):

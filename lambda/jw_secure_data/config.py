@@ -20,6 +20,7 @@ Resolution precedence (highest wins):
 """
 
 from __future__ import annotations
+from typing import Optional, Union
 
 import json
 import os
@@ -44,7 +45,7 @@ def environment() -> str:
     return (os.environ.get(ENVIRONMENT) or LOCAL).strip().lower()
 
 
-def secret_name(env: str | None = None) -> str:
+def secret_name(env: Optional[str] = None) -> str:
     env = env or environment()
     source = "dev" if env == LOCAL else env
     return _SECRET_TEMPLATE.format(environment=source)

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any Optional
 
 from services.llm.types import LlmQueryPlan
 
@@ -78,7 +78,7 @@ def _labelize(key: str) -> str:
     return key.replace("_", " ").strip().title()
 
 
-def _coerce_number(value: Any) -> float | int:
+def _coerce_number(value: Any) -> Union[float, int]:
     if isinstance(value, bool):
         return int(value)
     if isinstance(value, int):

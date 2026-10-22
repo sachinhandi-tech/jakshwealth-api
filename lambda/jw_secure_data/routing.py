@@ -22,7 +22,7 @@ class FeatureRoute:
     path: str
     methods: frozenset[str]
     handle: FeatureHandler
-    path_prefix: str | None = None
+    path_prefix: Optional[str] = None
 
     def matches(self, suffix: str) -> bool:
         if self.path_prefix:
@@ -44,11 +44,11 @@ class FeatureRoute:
         return self.handle(event, trace, authorizer, method)
 
 
-def normalize_path(path: str | None) -> str:
+def normalize_path(path: Optional[str]) -> str:
     return (path or "").strip("/")
 
 
-def route_suffix(path: str | None) -> str:
+def route_suffix(path: Optional[str]) -> str:
     normalized = normalize_path(path)
     if normalized == ROUTE_PREFIX:
         return ""
@@ -58,7 +58,7 @@ def route_suffix(path: str | None) -> str:
     return ""
 
 
-def parse_json_body(event: dict | None) -> dict[str, Any]:
+def parse_json_body(event: Optional[dict]) -> dict[str, Any]:
     raw = (event or {}).get("body")
     if isinstance(raw, dict):
         return raw
@@ -78,7 +78,7 @@ def dispatch_feature_routes(
     trace: RequestTrace,
     authorizer: dict[str, Any],
     method: str,
-) -> dict | None:
+) -> Optional[dict]:
     """Return a response when a feature route matches; otherwise None."""
     for route in routes:
         if route.matches(suffix):

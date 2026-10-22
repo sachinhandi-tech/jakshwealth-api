@@ -67,7 +67,7 @@ def normalize_nse_symbol(raw_symbol: str) -> str:
     return symbol
 
 
-def load_symbols_from_csv(csv_path: Path | str) -> list[str]:
+def load_symbols_from_csv(csv_path: Union[Path, str]) -> list[str]:
     path = Path(csv_path)
     if not path.exists():
         raise FileNotFoundError(f"Universe CSV not found: {path}")
@@ -88,7 +88,7 @@ def load_symbols_from_csv(csv_path: Path | str) -> list[str]:
     return symbols
 
 
-def resolve_universe_csv(segment: str | None = None) -> Path:
+def resolve_universe_csv(segment: Optional[str] = None) -> Path:
     key = (segment or DEFAULT_UNIVERSE_SEGMENT).strip().lower()
     if key not in UNIVERSE_SEGMENTS:
         known = ", ".join(sorted(UNIVERSE_SEGMENTS))
@@ -98,18 +98,18 @@ def resolve_universe_csv(segment: str | None = None) -> Path:
     return DATA_DIR / UNIVERSE_SEGMENTS[key]["file"]
 
 
-def universe_symbols(segment: str | None = None, limit: int | None = None) -> list[str]:
+def universe_symbols(segment: Optional[str] = None, limit: Optional[int] = None) -> list[str]:
     symbols = load_symbols_from_csv(resolve_universe_csv(segment))
     if limit is not None and limit > 0:
         return symbols[:limit]
     return symbols
 
 
-def default_universe_symbols(limit: int | None = None) -> list[str]:
+def default_universe_symbols(limit: Optional[int] = None) -> list[str]:
     return universe_symbols(DEFAULT_UNIVERSE_SEGMENT, limit)
 
 
-def universe_info(segment: str | None = None) -> dict[str, Any]:
+def universe_info(segment: Optional[str] = None) -> dict[str, Any]:
     key = (segment or DEFAULT_UNIVERSE_SEGMENT).strip().lower()
     if key not in UNIVERSE_SEGMENTS:
         known = ", ".join(sorted(UNIVERSE_SEGMENTS))
@@ -380,7 +380,7 @@ def _scan_symbols(
     symbols: list[str],
     options: dict[str, Any],
     *,
-    on_progress: Callable[[int, int], None] | None = None,
+    on_progress: Optional[Callable[[int, int], None]] = None,
 ) -> list[dict[str, Any]]:
     scan_kwargs = _scan_options_kwargs(options)
     max_workers = max(1, min(int(options.get("max_workers", DEFAULT_MAX_WORKERS)), 16))
@@ -454,7 +454,7 @@ def resolve_scan_symbols(payload: dict[str, Any]) -> list[str]:
 def run_scan(
     payload: dict[str, Any],
     *,
-    on_progress: Callable[[int, int], None] | None = None,
+    on_progress: Optional[Callable[[int, int], None]] = None,
 ) -> dict[str, Any]:
     options = _normalize_options(payload)
 

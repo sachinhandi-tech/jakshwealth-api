@@ -1,6 +1,7 @@
 """LLM service factory."""
 
 from __future__ import annotations
+from typing import Optional, Union
 
 import os
 
@@ -16,7 +17,7 @@ def llm_service_name() -> str:
     return configured if configured in _VALID_PROVIDERS else "mock"
 
 
-def get_llm_service(name: str | None = None) -> LlmService:
+def get_llm_service(name: Optional[str] = None) -> LlmService:
     provider = (name or llm_service_name()).strip().lower()
     if provider == "remote":
         return RemoteLlmService()

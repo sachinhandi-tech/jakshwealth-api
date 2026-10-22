@@ -28,7 +28,7 @@ class ChatProcessingError(ValueError):
 def process_chat_prompt(
     prompt: str,
     *,
-    llm_service_name: str | None = None,
+    llm_service_name: Optional[str] = None,
     use_live_data: bool = False,
 ) -> JSON:
     """

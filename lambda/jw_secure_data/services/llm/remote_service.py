@@ -27,10 +27,10 @@ class RemoteLlmService:
     def __init__(
         self,
         *,
-        endpoint: str | None = None,
-        api_key: str | None = None,
-        model: str | None = None,
-        timeout_seconds: float | None = None,
+        endpoint: Optional[str] = None,
+        api_key: Optional[str] = None,
+        model: Optional[str] = None,
+        timeout_seconds: Optional[float] = None,
     ) -> None:
         settings = config.llm_settings()
         self._endpoint = (endpoint or settings["endpoint"]).strip()

@@ -49,7 +49,7 @@ class ChartMetadata:
     designation: str
     view_name: str
     chart_type: str
-    change_version: str | None = None
+    change_version: Optional[str] = None
 
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> ChartMetadata:
@@ -72,7 +72,7 @@ class ChartMetadata:
         )
 
 
-def normalize_filters(raw: dict[str, Any] | None) -> dict[str, list[str]]:
+def normalize_filters(raw: Optional[dict[str, Any]]) -> dict[str, list[str]]:
     filters = raw if isinstance(raw, dict) else {}
     normalized: dict[str, list[str]] = {}
     for key in FILTER_KEYS:

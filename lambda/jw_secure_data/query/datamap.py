@@ -10,7 +10,7 @@ from typing import Any
 _DATAMAP_PATH = Path(__file__).with_name("datamap.json")
 
 
-def load_datamap(path: Path | None = None) -> dict[str, Any]:
+def load_datamap(path: Optional[Path] = None) -> dict[str, Any]:
     """Return the canonical datamap document."""
     target = path or _DATAMAP_PATH
     with target.open(encoding="utf-8") as handle:

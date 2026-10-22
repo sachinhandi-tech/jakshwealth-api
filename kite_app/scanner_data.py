@@ -11,6 +11,7 @@ import os
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Optional
 
 import requests
 from kiteconnect.exceptions import KiteException, TokenException
@@ -43,7 +44,7 @@ _OTHER_SERIES = frozenset({
     *(f"N{digit}" for digit in range(10)),
     *(f"N{letter}" for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ"),
 })
-_universe_cache: tuple[float, list[dict]] | None = None
+_universe_cache: Optional[tuple[float, list[dict]]] = None
 
 
 def cache_path() -> Path:

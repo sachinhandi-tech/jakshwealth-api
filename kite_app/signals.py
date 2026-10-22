@@ -6,6 +6,7 @@ import csv
 import io
 import time
 from datetime import date, datetime, timedelta
+from typing import Optional
 
 import requests
 from kiteconnect.exceptions import KiteException, TokenException
@@ -17,8 +18,8 @@ REQUEST_GAP_SECONDS = 0.35
 # API Gateway closes the HTTP request at about 29 seconds. Stop before that.
 SCAN_BUDGET_SECONDS = 22
 
-_constituent_cache: tuple[float, list[dict]] | None = None
-_token_cache: tuple[float, dict[str, int]] | None = None
+_constituent_cache: Optional[tuple[float, list[dict]]] = None
+_token_cache: Optional[tuple[float, dict[str, int]]] = None
 
 
 class SignalScanError(Exception):
@@ -154,7 +155,7 @@ def _row(
     crossover_type: str,
     fast_value: float,
     slow_value: float,
-    trend_line: list[Optional[float]] | None,
+    trend_line: Optional[list[Optional[float]]],
 ) -> dict:
     trend_value = trend_line[index] if trend_line else None
     if trend_value is None:

@@ -1,6 +1,7 @@
 """Resolve chart SQL builders via nested registry and stable chart_id."""
 
 from __future__ import annotations
+from typing import Optional, Union
 
 from collections.abc import Callable
 
@@ -11,7 +12,7 @@ QueryBuilder = Callable[[ChartQueryContext], str]
 BuilderKey = tuple[str, str]  # (chart_id, timeline)
 
 
-def resolve_chart_id(context: ChartQueryContext) -> str | None:
+def resolve_chart_id(context: ChartQueryContext) -> Optional[str]:
     """Resolve stable chart_id — prefer metadata id, else nested registry path."""
     if context.chart_id:
         return context.chart_id.strip()
@@ -28,7 +29,7 @@ def resolve_chart_id(context: ChartQueryContext) -> str | None:
         return None
 
 
-def builder_key(context: ChartQueryContext) -> BuilderKey | None:
+def builder_key(context: ChartQueryContext) -> Union[BuilderKey, None]:
     chart_id = resolve_chart_id(context)
     if not chart_id:
         return None

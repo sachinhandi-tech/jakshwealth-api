@@ -37,7 +37,7 @@ def _s3_key(job_id: str) -> str:
     return f"{JOBS_PREFIX}/{job_id}.json"
 
 
-def _read_job(job_id: str) -> dict[str, Any] | None:
+def _read_job(job_id: str) -> Optional[dict[str, Any]]:
     if _use_local_store():
         path = _local_job_path(job_id)
         if not path.exists():
@@ -90,11 +90,11 @@ def create_job(request: dict[str, Any], *, total_symbols: int) -> dict[str, Any]
     return job
 
 
-def get_job(job_id: str) -> dict[str, Any] | None:
+def get_job(job_id: str) -> Optional[dict[str, Any]]:
     return _read_job(job_id)
 
 
-def update_job(job_id: str, **fields: Any) -> dict[str, Any] | None:
+def update_job(job_id: str, **fields: Any) -> Optional[dict[str, Any]]:
     job = _read_job(job_id)
     if job is None:
         return None

@@ -20,8 +20,8 @@ class DSLVerificationResult:
     valid: bool
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
-    compiled_sql: str | None = None
-    compiled_params: list[Any] | None = None
+    compiled_sql: Optional[str] = None
+    compiled_params: Optional[list[Any]] = None
 
 
 class DSLVerificationError(ValueError):
@@ -178,7 +178,7 @@ def _collect_aliases(dsl: JSON) -> dict[str, str]:
     return aliases
 
 
-def _split_field_ref(ref: str) -> tuple[str | None, str]:
+def _split_field_ref(ref: str) -> tuple[Optional[str], str]:
     if "." not in ref:
         return None, ref
     alias, column = ref.split(".", 1)

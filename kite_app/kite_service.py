@@ -7,6 +7,7 @@ import os
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 from urllib.parse import parse_qs, urlparse
 from zoneinfo import ZoneInfo
 
@@ -47,8 +48,8 @@ class KiteService:
     def __init__(self, store: Optional[SessionStore] = None) -> None:
         self.store = store or SessionStore()
         self._client: Optional[KiteConnect] = None
-        self._client_key: tuple[str, str] | None = None
-        self._profile_cache: tuple[float, dict] | None = None
+        self._client_key: Optional[tuple[str, str]] = None
+        self._profile_cache: Optional[tuple[float, dict]] = None
 
     def session_status(self) -> dict:
         record = self.saved_session()

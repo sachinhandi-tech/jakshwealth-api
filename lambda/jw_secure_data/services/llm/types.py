@@ -31,10 +31,10 @@ class LlmQueryPlan:
     """Structured plan returned by an LLM provider before warehouse execution."""
 
     response_type: ResponseType
-    text: str | None = None
-    dsl: JSON | None = None
-    presentation: JSON | None = None
-    sample_rows: list[JSON] | None = None
+    text: Optional[str] = None
+    dsl: Union[JSON, None] = None
+    presentation: Union[JSON, None] = None
+    sample_rows: Optional[list[JSON]] = None
 
 
 @dataclass(frozen=True)

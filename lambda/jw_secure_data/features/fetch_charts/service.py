@@ -286,10 +286,10 @@ def _build_chart_from_metadata(
 
 def _build_chart_from_metadata_safe(
     metadata: ChartMetadata,
-    rows: list[dict[str, Any]] | None,
+    rows: Optional[list[dict[str, Any]]],
     *,
-    context: ChartQueryContext | None = None,
-) -> dict[str, Any] | None:
+    context: Union[ChartQueryContext, None] = None,
+) -> Optional[dict[str, Any]]:
     try:
         chart_rows = rows
         if not chart_rows and context is not None:

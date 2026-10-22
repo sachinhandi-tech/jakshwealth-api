@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable
+from typing import Optional
 
 TickCallback = Callable[[int, float], None]
 
@@ -15,7 +16,7 @@ class TickHub:
         self._connected = False
         self._listeners: dict[int, tuple[set[int], TickCallback]] = {}
         self._next_id = 0
-        self._credentials: tuple[str, str] | None = None
+        self._credentials: Optional[tuple[str, str]] = None
         self._platform_user_id = None
 
     def add(self, api_key: str, access_token: str, tokens: set[int], callback: TickCallback, platform_user_id=None) -> int:

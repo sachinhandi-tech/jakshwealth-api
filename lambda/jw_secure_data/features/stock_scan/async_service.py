@@ -9,7 +9,7 @@ from typing import Any
 from features.stock_scan import job_store, service
 
 
-def _enqueue_worker(job_id: str, *, function_name: str | None) -> None:
+def _enqueue_worker(job_id: str, *, function_name: Optional[str]) -> None:
     payload = {"internal": "stock_scan_job", "jobId": job_id}
     if os.environ.get("ENVIRONMENT", "").lower() == "local":
         import threading
@@ -27,7 +27,7 @@ def _enqueue_worker(job_id: str, *, function_name: str | None) -> None:
     )
 
 
-def start_async_scan(payload: dict[str, Any], *, function_name: str | None = None) -> dict[str, Any]:
+def start_async_scan(payload: dict[str, Any], *, function_name: Optional[str] = None) -> dict[str, Any]:
     symbols = service.resolve_scan_symbols(payload)
     job = job_store.create_job(payload, total_symbols=len(symbols))
     _enqueue_worker(job["jobId"], function_name=function_name)
@@ -38,7 +38,7 @@ def start_async_scan(payload: dict[str, Any], *, function_name: str | None = Non
     }
 
 
-def get_job_status(job_id: str) -> dict[str, Any] | None:
+def get_job_status(job_id: str) -> Optional[dict[str, Any]]:
     job = job_store.get_job(job_id)
     if job is None:
         return None
