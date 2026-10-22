@@ -8,7 +8,6 @@ import uuid
 from typing import Literal, Optional, Union
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -30,13 +29,6 @@ logger = logging.getLogger("kite_app")
 app = FastAPI(title="JakshWealth Kite", version="1.0.0")
 app.include_router(zerodha_auth_router)
 service = KiteService()
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 
 @app.middleware("http")
