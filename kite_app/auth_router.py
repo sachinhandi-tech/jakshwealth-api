@@ -25,16 +25,23 @@ _STATE_TTL_SECONDS = 600
 
 
 @router.get("/auth/zerodha/login")
-def zerodha_login(platform_user_id: Optional[uuid.UUID] = Query(default=None)) -> RedirectResponse:
+def zerodha_login(platform_user_id: str | None = Query(default=None)) -> RedirectResponse:
     """Send the browser to Zerodha. The first sign-in opens the account."""
-    if platform_user_id is None:
+    platform_uuid: uuid.UUID | None = None
+    if platform_user_id:
+        try:
+            platform_uuid = uuid.UUID(platform_user_id)
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail="Invalid platform_user_id")
+
+    if platform_uuid is None:
         if has_active_user():
             raise HTTPException(status_code=403, detail="Subscriber is not active")
         signed = _sign_desk_state()
-    elif active_user(platform_user_id) is None:
+    elif active_user(platform_uuid) is None:
         raise HTTPException(status_code=403, detail="Subscriber is not active")
     else:
-        signed = _sign_state(platform_user_id)
+        signed = _sign_state(platform_uuid)
     kite = KiteConnect(api_key=_api_key())
     state = quote(signed, safe="")
     return RedirectResponse(url=f"{kite.login_url()}&redirect_params=state%3D{state}", status_code=302)
