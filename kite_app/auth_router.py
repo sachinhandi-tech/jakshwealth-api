@@ -25,9 +25,9 @@ _STATE_TTL_SECONDS = 600
 
 
 @router.get("/auth/zerodha/login")
-def zerodha_login(platform_user_id: str | None = Query(default=None)) -> RedirectResponse:
+def zerodha_login(platform_user_id: Optional[str] = Query(default=None)) -> RedirectResponse:
     """Send the browser to Zerodha. The first sign-in opens the account."""
-    platform_uuid: uuid.UUID | None = None
+    platform_uuid: Optional[uuid.UUID] = None
     if platform_user_id:
         try:
             platform_uuid = uuid.UUID(platform_user_id)
