@@ -1,7 +1,5 @@
 """Zerodha OAuth for subscribers. Platform credentials stay on the server."""
 
-from __future__ import annotations
-
 import hashlib
 import hmac
 import logging
