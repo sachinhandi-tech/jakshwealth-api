@@ -128,7 +128,7 @@ def scan_nifty100_parallel_cached(
     db = get_sessionmaker()()
     try:
         constituents = (
-            load_nse_all_stocks(nse_equity_tokens())
+            load_nse_all_stocks(nse_equity_tokens(kite))
             if scan_all_nse
             else load_nifty100()
         )
@@ -139,7 +139,7 @@ def scan_nifty100_parallel_cached(
         constituents = constituents[:max_stocks]
         universe_count = len(constituents)
 
-        tokens = nse_equity_tokens()
+        tokens = nse_equity_tokens(kite)
         stock_tokens = {}
         for symbol in constituents:
             if symbol in tokens:

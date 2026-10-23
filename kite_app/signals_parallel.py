@@ -145,7 +145,7 @@ def scan_nifty100_parallel(
     try:
         # Load constituents
         constituents = (
-            load_nse_all_stocks(nse_equity_tokens())
+            load_nse_all_stocks(nse_equity_tokens(kite))
             if scan_all_nse
             else load_nifty100()
         )
@@ -157,7 +157,7 @@ def scan_nifty100_parallel(
         universe_count = len(constituents)
 
         # Fetch tokens once
-        tokens = nse_equity_tokens()
+        tokens = nse_equity_tokens(kite)
         stock_tokens = {}
         for symbol in constituents:
             if symbol in tokens:
