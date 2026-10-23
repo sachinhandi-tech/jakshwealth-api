@@ -135,3 +135,90 @@ class RejectedPostback(TradingBase):
     rejected_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     raw_body: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class AlgoSignalRecord(TradingBase):
+    """Algo-generated buy/sell signals persisted for history and backtesting."""
+
+    __tablename__ = "algo_signals"
+
+    signal_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    platform_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid, nullable=True)
+    symbol: Mapped[str] = mapped_column(String(32), nullable=False)
+    transaction_type: Mapped[str] = mapped_column(String(8), nullable=False)  # BUY or SELL
+    entry_price: Mapped[float] = mapped_column(nullable=False)
+    stop_loss: Mapped[Optional[float]] = mapped_column(nullable=True)
+    target: Mapped[Optional[float]] = mapped_column(nullable=True)
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class SignalScanResult(TradingBase):
+    """Individual stock crossover found in a signal scan for history and analysis."""
+
+    __tablename__ = "signal_scan_results"
+
+    result_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    scan_job_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    platform_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid, nullable=True)
+    scan_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ticker: Mapped[str] = mapped_column(String(32), nullable=False)
+    company: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    crossover_type: Mapped[str] = mapped_column(String(16), nullable=False)  # bullish or bearish
+    crossover_date: Mapped[str] = mapped_column(String(16), nullable=False)
+    close: Mapped[float] = mapped_column(nullable=False)
+    short_sma: Mapped[float] = mapped_column(nullable=False)
+    long_sma: Mapped[float] = mapped_column(nullable=False)
+    trend_sma: Mapped[Optional[float]] = mapped_column(nullable=True)
+    trend_bias: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)  # above or below
+    rank: Mapped[int] = mapped_column(nullable=False)
+    scan_mode: Mapped[str] = mapped_column(String(16), nullable=False)  # crossover or price
+    universe: Mapped[str] = mapped_column(String(16), nullable=False)  # nifty100 or all_nse
+
+
+class SignalTrade(TradingBase):
+    """Trade executed based on a signal scan result for P&L tracking and backtesting."""
+
+    __tablename__ = "signal_trades"
+
+    trade_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    platform_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid, nullable=True)
+    signal_result_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    ticker: Mapped[str] = mapped_column(String(32), nullable=False)
+    signal_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    entry_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    entry_price: Mapped[float] = mapped_column(nullable=False)
+    entry_quantity: Mapped[int] = mapped_column(nullable=False)
+    exit_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    exit_price: Mapped[Optional[float]] = mapped_column(nullable=True)
+    exit_quantity: Mapped[Optional[int]] = mapped_column(nullable=True)
+    transaction_type: Mapped[str] = mapped_column(String(8), nullable=False)  # BUY or SELL
+    status: Mapped[str] = mapped_column(String(16), nullable=False)  # pending, open, closed, cancelled
+    pnl: Mapped[Optional[float]] = mapped_column(nullable=True)  # Profit/Loss amount
+    pnl_percent: Mapped[Optional[float]] = mapped_column(nullable=True)  # Profit/Loss percentage
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class StrategyPerformance(TradingBase):
+    """Daily/monthly strategy performance metrics for analysis and backtesting."""
+
+    __tablename__ = "strategy_performance"
+
+    perf_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    platform_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid, nullable=True)
+    period_date: Mapped[str] = mapped_column(String(16), nullable=False)  # YYYY-MM-DD
+    period_type: Mapped[str] = mapped_column(String(16), nullable=False)  # daily or monthly
+    scan_type: Mapped[str] = mapped_column(String(16), nullable=False)  # short_term or long_term
+    universe: Mapped[str] = mapped_column(String(16), nullable=False)  # nifty100 or all_nse
+    total_signals: Mapped[int] = mapped_column(nullable=False)  # Total crossovers found
+    total_trades: Mapped[int] = mapped_column(nullable=False)  # Total trades executed
+    winning_trades: Mapped[int] = mapped_column(nullable=False)
+    losing_trades: Mapped[int] = mapped_column(nullable=False)
+    total_pnl: Mapped[float] = mapped_column(nullable=False)  # Total P&L
+    avg_pnl_per_trade: Mapped[float] = mapped_column(nullable=False)
+    win_rate: Mapped[float] = mapped_column(nullable=False)  # winning_trades / total_trades
+    max_gain: Mapped[float] = mapped_column(nullable=False)
+    max_loss: Mapped[float] = mapped_column(nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
