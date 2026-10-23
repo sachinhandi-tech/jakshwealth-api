@@ -6,6 +6,7 @@ import logging
 import os
 import time
 import uuid
+from typing import Optional
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 from fastapi import APIRouter, HTTPException, Query
