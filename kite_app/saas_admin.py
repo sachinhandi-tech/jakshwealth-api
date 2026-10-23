@@ -14,7 +14,7 @@ from sqlalchemy import func
 from kite_app.saas_models import Organization, OrganizationUser, Subscription, UsageMetrics, AuditLog, BillingRecord
 from kite_app.models import get_sessionmaker
 
-router = APIRouter(tags=["admin"], prefix="/api/admin")
+router = APIRouter(tags=["admin-analytics"], prefix="/api/analytics")
 
 
 class OrgMetrics(BaseModel):
