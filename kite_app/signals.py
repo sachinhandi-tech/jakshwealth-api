@@ -82,6 +82,41 @@ def moving_average(closes: list[float], window: int, ma_type: str) -> list[Optio
     return simple_moving_average(closes, window)
 
 
+def history_span_days(lookback_days: int, *windows: int) -> int:
+    """Calendar days required so the longest average is valid across the lookback."""
+    history_window = max([window for window in windows if window >= 2] or [0])
+    return int((lookback_days + history_window + 5) * 1.8) + 10
+
+
+def explain_signal(
+    row: dict,
+    *,
+    scan_mode: str,
+    short_window: int,
+    long_window: int,
+    short_type: str,
+    long_type: str,
+    trend_window: int,
+) -> str:
+    """Say which averages crossed, on which day, and where the close sits now."""
+    fast = f"{short_window} {short_type.upper()}"
+    slow = f"{long_window} {long_type.upper()}"
+    direction = "above" if row["crossover_type"] == "bullish" else "below"
+    when = _spoken_date(row["crossover_date"])
+    if scan_mode == "price":
+        sentence = f"Close crossed {direction} the {slow} on {when}."
+    else:
+        sentence = f"The {fast} crossed {direction} the {slow} on {when}."
+    close = float(row["close"])
+    trend = row.get("trend_sma")
+    if trend is not None and row.get("trend_bias") and trend_window >= 2:
+        side = "above" if row["trend_bias"] == "above" else "below"
+        sentence += f" Close {close:.2f} is {side} the {trend_window} SMA at {float(trend):.2f}."
+    else:
+        sentence += f" Close was {close:.2f}."
+    return sentence
+
+
 def latest_crossover(
     candles: list[dict],
     short_window: int,
@@ -210,9 +245,7 @@ def scan_nifty100(
     tokens = nse_equity_tokens(kite)
     constituents = load_nse_all_stocks(tokens) if scan_all_nse else load_nifty100()
     end = datetime.now()
-    history_window = max(long_window, trend_window)
-    calendar_days = int((lookback_days + history_window + 5) * 1.8) + 10
-    start = end - timedelta(days=calendar_days)
+    start = end - timedelta(days=history_span_days(lookback_days, long_window, trend_window))
     signals = []
     skipped = 0
     scanned = 0
@@ -310,29 +343,50 @@ def load_nse_all_stocks(tokens: dict[str, int]) -> list[dict]:
     return constituents
 
 
-def nse_equity_tokens(kite) -> dict[str, int]:
-    global _token_cache
+_equity_cache: Optional[tuple[float, list[dict]]] = None
+_EQUITY_PATTERN = re.compile(r"^[A-Z][A-Z0-9\-]*$")
+
+
+def nse_equities(kite) -> list[dict]:
+    """NSE equity rows with the Kite token and the instrument name."""
+    global _equity_cache, _token_cache
     now = time.monotonic()
-    if _token_cache and now - _token_cache[0] < CACHE_SECONDS:
-        return _token_cache[1]
+    if _equity_cache and now - _equity_cache[0] < CACHE_SECONDS:
+        return _equity_cache[1]
     try:
         instruments = kite.instruments("NSE")
     except TokenException:
         raise
     except KiteException as exc:
         raise SignalScanError("Kite could not load NSE instruments.") from exc
-    tokens = {}
-    equity_pattern = re.compile(r"^[A-Z][A-Z0-9\-]*$")
+    rows = []
     for instrument in instruments:
-        if instrument.get("exchange") == "NSE" and instrument.get("instrument_type") == "EQ":
-            symbol = str(instrument.get("tradingsymbol") or "").strip()
-            token = instrument.get("instrument_token")
-            if symbol and token is not None and equity_pattern.match(symbol):
-                tokens[symbol] = int(token)
-    if not tokens:
+        if instrument.get("exchange") != "NSE" or instrument.get("instrument_type") != "EQ":
+            continue
+        symbol = str(instrument.get("tradingsymbol") or "").strip()
+        token = instrument.get("instrument_token")
+        if not symbol or token is None or not _EQUITY_PATTERN.match(symbol):
+            continue
+        company = str(instrument.get("name") or symbol).strip() or symbol
+        rows.append({"ticker": symbol, "company": company, "token": int(token)})
+    if not rows:
         raise SignalScanError("Kite returned no NSE equity instruments.")
-    _token_cache = (now, tokens)
-    return tokens
+    rows.sort(key=lambda row: row["ticker"])
+    _equity_cache = (now, rows)
+    _token_cache = (now, {row["ticker"]: row["token"] for row in rows})
+    return rows
+
+
+def nse_equity_tokens(kite) -> dict[str, int]:
+    global _token_cache
+    now = time.monotonic()
+    if _token_cache and now - _token_cache[0] < CACHE_SECONDS:
+        return _token_cache[1]
+    return {row["ticker"]: row["token"] for row in nse_equities(kite)}
+
+
+def _spoken_date(value) -> str:
+    return _as_date(value).strftime("%d %b %Y")
 
 
 def _as_date(value) -> date:

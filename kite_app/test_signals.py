@@ -85,6 +85,64 @@ def test_latest_crossover_keeps_the_newest_cross_inside_lookback():
     assert found["crossover_date"] == candles[-1]["date"].isoformat() or found["short_sma"] > found["long_sma"]
 
 
+def test_parallel_scan_keeps_a_real_cross_and_explains_it(monkeypatch):
+    from datetime import date, timedelta
+
+    from kite_app.signals_parallel_cached import scan_nifty100_parallel_cached
+
+    start = date(2024, 1, 1)
+    flat = [{"date": start + timedelta(days=index), "close": 10} for index in range(40)]
+    rising = [{"date": start + timedelta(days=40 + index), "close": 14 + index} for index in range(12)]
+    quiet = [{"date": start + timedelta(days=index), "close": 10} for index in range(8)]
+
+    class Database:
+        def close(self):
+            return None
+
+    def candles(kite, db, token, ticker, start_date, end_date):
+        assert (end_date - start_date).days > 20
+        if ticker == "QUIET":
+            return quiet
+        return flat + rising
+
+    monkeypatch.setattr(
+        "kite_app.signals_parallel_cached.get_sessionmaker",
+        lambda: (lambda: Database()),
+    )
+    monkeypatch.setattr("kite_app.signals_parallel_cached.get_candles_with_cache", candles)
+    monkeypatch.setattr(
+        "kite_app.signals_parallel_cached.load_nifty100",
+        lambda: [
+            {"ticker": "RISE", "company": "Rising Ltd"},
+            {"ticker": "QUIET", "company": "Quiet Ltd"},
+        ],
+    )
+    monkeypatch.setattr(
+        "kite_app.signals_parallel_cached.nse_equity_tokens",
+        lambda kite: {"RISE": 1, "QUIET": 2},
+    )
+
+    result = scan_nifty100_parallel_cached(
+        kite=object(),
+        scan_mode="crossover",
+        short_type="ema",
+        long_type="sma",
+        short_window=3,
+        long_window=8,
+        trend_window=5,
+        lookback_days=30,
+        max_stocks=10,
+        budget_seconds=5,
+    )
+
+    assert result["scanned"] == 2
+    assert result["skipped"] == 1
+    assert [row["ticker"] for row in result["signals"]] == ["RISE"]
+    assert result["signals"][0]["crossover_type"] == "bullish"
+    assert "crossed above" in result["signals"][0]["reason"]
+    assert "5 SMA" in result["signals"][0]["reason"]
+
+
 def test_bearish_crossover():
     start = date(2026, 2, 1)
     high = [{"date": start + timedelta(days=index), "close": 20} for index in range(6)]

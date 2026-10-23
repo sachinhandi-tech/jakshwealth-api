@@ -6,13 +6,33 @@ Solution: Cache historical data in database, update incrementally with new days 
 
 from __future__ import annotations
 
+import threading
+import time
 import uuid
 from datetime import datetime, date, timedelta
 from typing import Optional
 
 from sqlalchemy import JSON, DateTime, String, Text, Uuid
+from kiteconnect.exceptions import TokenException
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, Session
 import json
+
+
+_CACHE_LOCK = threading.Lock()
+_RATE_LOCK = threading.Lock()
+_NEXT_KITE_CALL = 0.0
+_KITE_GAP_SECONDS = 0.34
+
+
+def _wait_for_kite() -> None:
+    """Keep historical requests near Kite's three-per-second limit."""
+    global _NEXT_KITE_CALL
+    with _RATE_LOCK:
+        now = time.monotonic()
+        delay = max(0.0, _NEXT_KITE_CALL - now)
+        _NEXT_KITE_CALL = max(now, _NEXT_KITE_CALL) + _KITE_GAP_SECONDS
+    if delay:
+        time.sleep(delay)
 
 
 class CacheBase(DeclarativeBase):
@@ -35,6 +55,17 @@ class StockHistoryCache(CacheBase):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+def _json_ready(candles: list[dict]) -> list[dict]:
+    ready = []
+    for candle in candles:
+        item = dict(candle)
+        value = item.get("date")
+        if hasattr(value, "isoformat"):
+            item["date"] = value.isoformat()
+        ready.append(item)
+    return ready
+
+
 def get_cached_candles(
     db: Session,
     token: int,
@@ -43,11 +74,12 @@ def get_cached_candles(
     end_date: date,
 ) -> Optional[list[dict]]:
     """Get cached historical data if available and complete."""
-    cache = db.query(StockHistoryCache).filter(
-        StockHistoryCache.token == token,
-        StockHistoryCache.start_date <= start_date,
-        StockHistoryCache.end_date >= end_date,
-    ).first()
+    with _CACHE_LOCK:
+        cache = db.query(StockHistoryCache).filter(
+            StockHistoryCache.token == token,
+            StockHistoryCache.start_date <= start_date,
+            StockHistoryCache.end_date >= end_date,
+        ).first()
 
     if cache:
         try:
@@ -70,15 +102,19 @@ def cache_candles(
         return
 
     now = datetime.now()
-    cache = db.query(StockHistoryCache).filter(
-        StockHistoryCache.token == token,
-    ).first()
+    payload = json.dumps(_json_ready(candles))
+    with _CACHE_LOCK:
+        cache = db.query(StockHistoryCache).filter(
+            StockHistoryCache.token == token,
+        ).first()
+
+    if cache and cache.candle_count >= len(candles) and cache.start_date <= start_date and cache.end_date >= end_date:
+        return
 
     if cache:
-        # Update existing cache (extend date range if needed)
         cache.start_date = min(cache.start_date, start_date)
         cache.end_date = max(cache.end_date, end_date)
-        cache.candles_json = json.dumps(candles)
+        cache.candles_json = payload
         cache.candle_count = len(candles)
         cache.updated_at = now
     else:
@@ -89,12 +125,13 @@ def cache_candles(
             ticker=ticker,
             start_date=start_date,
             end_date=end_date,
-            candles_json=json.dumps(candles),
+            candles_json=payload,
             candle_count=len(candles),
             cached_at=now,
             updated_at=now,
         )
-        db.add(cache)
+        with _CACHE_LOCK:
+            db.add(cache)
 
     db.commit()
 
@@ -121,19 +158,25 @@ def get_candles_with_cache(
     if cached:
         return cached
 
-    # Not cached, fetch from Kite API
     try:
+        _wait_for_kite()
         candles = kite.historical_data(
             instrument_token=token,
             from_date=start_date,
             to_date=end_date,
             interval="day",
         )
-        if candles:
-            cache_candles(db, token, ticker, start_date, end_date, candles)
-        return candles
+    except TokenException:
+        raise
     except Exception:
         return None
+    if not candles:
+        return None
+    try:
+        cache_candles(db, token, ticker, start_date, end_date, candles)
+    except Exception:
+        db.rollback()
+    return candles
 
 
 class CacheStats:

@@ -73,7 +73,7 @@ def run_scan_job(job_id: str) -> None:
         
         # Use cached parallel scanner
         scan_all_nse = params.get("scan_all_nse", False)
-        budget = 180 if scan_all_nse else ASYNC_SCAN_BUDGET_SECONDS
+        budget = 1200 if scan_all_nse else 180
         
         result = scan_nifty100_parallel_cached(kite, budget_seconds=budget, **params)
         _finish(job_id, "done", json.dumps(result), None)

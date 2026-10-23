@@ -1,35 +1,37 @@
-"""Parallel MA crossover scan with intelligent caching (95%+ API reduction)."""
+"""Parallel MA crossover scan. Cached history, paced Kite calls, real crosses only."""
 
 from __future__ import annotations
 
-import csv
-import io
-import re
+import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from typing import Optional
 
-import requests
 from kiteconnect.exceptions import KiteException, TokenException
 
+from kite_app.models import get_sessionmaker
 from kite_app.signals import (
-    load_nifty100, nse_equity_tokens, moving_average, MA_TYPES,
-    load_nse_all_stocks, CACHE_SECONDS, NIFTY100_CSV_URL, NIFTY100_CSV_FALLBACK,
-    _constituent_cache, _token_cache, SignalScanError,
+    SignalScanError,
+    explain_signal,
+    history_span_days,
+    latest_crossover,
+    latest_price_cross,
+    load_nifty100,
+    nse_equities,
+    nse_equity_tokens,
 )
 from kite_app.signals_cache import get_candles_with_cache
-from kite_app.models import get_sessionmaker
 
-REQUEST_GAP_SECONDS = 0.01
-MAX_WORKERS = 150
+logger = logging.getLogger("kite_app.scan")
+
+MAX_WORKERS = 6
 SCAN_BUDGET_SECONDS = 22
 SCAN_BUDGET_SECONDS_ASYNC = 180
 
 
 def _scan_stock_cached(
     kite,
-    db_session,
     ticker: str,
     token: int,
     company: str,
@@ -40,13 +42,14 @@ def _scan_stock_cached(
     short_type: str,
     long_type: str,
     scan_mode: str,
-) -> Optional[dict]:
-    """Scan one stock using cached historical data."""
+) -> tuple[Optional[dict], str]:
+    """Return a real crossover, or a status of none or skipped."""
+    db_session = get_sessionmaker()()
     try:
         end_date = date.today()
-        start_date = end_date - timedelta(days=lookback_days)
-        
-        # Use cache-aware fetch (returns cached if available, fetches only if needed)
+        start_date = end_date - timedelta(
+            days=history_span_days(lookback_days, long_window, trend_window)
+        )
         candles = get_candles_with_cache(
             kite,
             db_session,
@@ -55,69 +58,46 @@ def _scan_stock_cached(
             start_date,
             end_date,
         )
-        
-        if not candles or len(candles) < long_window:
-            return None
-
-        closes = [float(c["close"]) for c in candles]
-        short_ma = moving_average(closes, short_window, short_type)
-        long_ma = moving_average(closes, long_window, long_type)
-        trend_sma = moving_average(closes, trend_window, "sma") if trend_window > 0 else None
-
-        if short_ma[-1] is None or long_ma[-1] is None:
-            return None
-
-        if len(short_ma) < 2 or len(long_ma) < 2:
-            return None
-
-        prev_short = short_ma[-2]
-        curr_short = short_ma[-1]
-        prev_long = long_ma[-2]
-        curr_long = long_ma[-1]
-
-        if prev_short is None or prev_long is None:
-            return None
-
-        crossover_type = None
-        if prev_short <= prev_long and curr_short > curr_long:
-            crossover_type = "bullish"
-        elif prev_short >= prev_long and curr_short < curr_long:
-            crossover_type = "bearish"
-
-        if not crossover_type and scan_mode == "crossover":
-            return None
-
-        close = closes[-1]
-        trend_bias = None
-        if trend_sma and trend_sma[-1] is not None:
-            trend_bias = "above" if close > trend_sma[-1] else "below"
-
-        # Extract and serialize crossover date
-        last_candle = candles[-1]
-        if isinstance(last_candle, dict):
-            crossover_date = last_candle.get("date")
+        needed = long_window + 1
+        if not candles or len(candles) < needed:
+            return None, "skipped"
+        if scan_mode == "price":
+            found = latest_price_cross(candles, long_window, lookback_days)
         else:
-            crossover_date = last_candle["date"]
-        
-        # Ensure it's a string
-        if hasattr(crossover_date, 'isoformat'):
-            crossover_date = crossover_date.isoformat()
-        else:
-            crossover_date = str(crossover_date)
-
+            found = latest_crossover(
+                candles,
+                short_window,
+                long_window,
+                lookback_days,
+                short_type,
+                short_type,
+                long_type,
+                trend_window,
+            )
+        if found is None:
+            return None, "none"
+        reason = explain_signal(
+            found,
+            scan_mode=scan_mode,
+            short_window=short_window,
+            long_window=long_window,
+            short_type=short_type,
+            long_type=long_type,
+            trend_window=trend_window,
+        )
         return {
-            "ticker": str(ticker),
-            "company": str(company),
-            "crossover_type": str(crossover_type or "no_crossover"),
-            "close": float(close),
-            "short_ma": float(short_ma[-1]),
-            "long_ma": float(long_ma[-1]),
-            "trend_sma": float(trend_sma[-1]) if trend_sma and trend_sma[-1] is not None else None,
-            "trend_bias": str(trend_bias) if trend_bias else None,
-            "crossover_date": crossover_date,
-        }
-    except Exception:
-        return None
+            "ticker": ticker,
+            "company": company or ticker,
+            "reason": reason,
+            **found,
+        }, "signal"
+    except TokenException:
+        raise
+    except Exception as exc:
+        logger.info("stock scan skipped %s %s", ticker, exc.__class__.__name__)
+        return None, "skipped"
+    finally:
+        db_session.close()
 
 
 def scan_nifty100_parallel_cached(
@@ -134,55 +114,51 @@ def scan_nifty100_parallel_cached(
     scan_all_nse: bool = False,
     budget_seconds: Optional[float] = None,
 ) -> dict:
-    """Parallel scan with intelligent caching (95%+ faster on repeat scans)."""
+    """Scan the chosen universe and keep only crosses inside the lookback."""
     start_time = time.monotonic()
     deadline = start_time + (SCAN_BUDGET_SECONDS if budget_seconds is None else budget_seconds)
-    
+
     db = get_sessionmaker()()
     try:
-        constituents = (
-            load_nse_all_stocks(nse_equity_tokens(kite))
-            if scan_all_nse
-            else load_nifty100()
-        )
+        if scan_all_nse:
+            constituents = nse_equities(kite)
+        else:
+            tokens = nse_equity_tokens(kite)
+            constituents = [
+                {**row, "token": tokens.get(row["ticker"])}
+                for row in load_nifty100()
+            ]
 
         if not constituents:
             raise SignalScanError("Could not load stock universe")
 
         constituents = constituents[:max_stocks]
         universe_count = len(constituents)
-
-        tokens = nse_equity_tokens(kite)
-        stock_tokens = {}
+        skipped = 0
+        queued = []
         for constituent in constituents:
-            symbol = constituent["ticker"]
-            if symbol in tokens:
-                stock_tokens[symbol] = tokens[symbol]
+            token = constituent.get("token")
+            if token is None:
+                skipped += 1
+                continue
+            queued.append(constituent)
 
-        if not stock_tokens:
+        if not queued:
             raise SignalScanError("No valid tokens found")
 
-        skipped = universe_count - len(stock_tokens)
         signals = []
         scanned = 0
-        api_calls = 0
-        cache_hits = 0
-
-        # Parallel scan with ThreadPoolExecutor
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
             futures = {}
-            for ticker, token in stock_tokens.items():
+            for constituent in queued:
                 if time.monotonic() > deadline:
                     break
-
-                company = ""
                 future = executor.submit(
                     _scan_stock_cached,
                     kite,
-                    db,
-                    ticker,
-                    token,
-                    company,
+                    constituent["ticker"],
+                    constituent["token"],
+                    constituent.get("company") or constituent["ticker"],
                     lookback_days,
                     short_window,
                     long_window,
@@ -191,28 +167,27 @@ def scan_nifty100_parallel_cached(
                     long_type,
                     scan_mode,
                 )
-                futures[future] = ticker
+                futures[future] = constituent["ticker"]
 
             for future in as_completed(futures):
                 if time.monotonic() > deadline:
                     break
-
-                result = future.result()
+                found, status = future.result()
                 scanned += 1
-                if result:
-                    signals.append(result)
+                if status == "skipped":
+                    skipped += 1
+                elif found:
+                    signals.append(found)
 
-        # Rank by MA alignment strength
-        for i, signal in enumerate(signals, 1):
-            signal["rank"] = i
+        signals.sort(key=lambda row: (row["crossover_date"], row["ticker"]), reverse=True)
+        for rank, signal in enumerate(signals, start=1):
+            signal["rank"] = rank
 
         elapsed = time.monotonic() - start_time
-        
-        # Get cache stats (with error handling)
         try:
             from kite_app.signals_cache import CacheStats
-            cache_stats = CacheStats(db)
-            cache_info = cache_stats.get_stats()
+
+            cache_info = CacheStats(db).get_stats()
         except Exception:
             cache_info = {"cached_stocks": 0, "total_candles": 0, "api_calls_saved": 0}
 
@@ -233,9 +208,11 @@ def scan_nifty100_parallel_cached(
             "workers": int(MAX_WORKERS),
             "cache": cache_info,
         }
-    except (KiteException, TokenException) as exc:
-        raise SignalScanError(f"Kite error: {exc}") from exc
+    except SignalScanError:
+        raise
+    except (KiteException, TokenException):
+        raise
     except Exception as exc:
-        raise SignalScanError(str(exc)) from exc
+        raise SignalScanError("The scan could not be completed.") from exc
     finally:
         db.close()
