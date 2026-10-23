@@ -5,16 +5,13 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 _ENV_ENABLE_AI_CHAT = "ENABLE_AI_CHAT"
 _TRUTHY = frozenset({"true", "1", "yes", "on"})
 
 _DEFAULT_FLAGS: dict[str, bool] = {
     "stockAnalysis": True,
-    "utilization": True,
-    "proofPoints": True,
-    "systemAdmin": True,
     "aiChat": False,
 }
 
