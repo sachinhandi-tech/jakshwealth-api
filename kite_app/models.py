@@ -97,5 +97,9 @@ def get_sessionmaker() -> sessionmaker:
             engine_kwargs = {"connect_args": {"check_same_thread": False}}
         engine = create_engine(url, **engine_kwargs)
         Base.metadata.create_all(engine)
+        
+        from kite_app.saas_models import SaasBase
+        SaasBase.metadata.create_all(engine)
+        
         _SESSIONMAKER = sessionmaker(bind=engine, expire_on_commit=False)
     return _SESSIONMAKER
