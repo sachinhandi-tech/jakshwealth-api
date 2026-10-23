@@ -194,16 +194,13 @@ def test_arm_exit_places_one_two_leg_sell_gtt_for_a_holding():
 def test_unread_filings_news_and_lawsuits_block_the_call(monkeypatch):
     from kite_app.algo_review import _read_source, review_setups
 
-    monkeypatch.delenv("LLM_RESEARCH_URL", raising=False)
-    assert _read_source("read_filings", {"symbol": "INFY"})["text"] == "This source is not connected."
-    monkeypatch.setenv("LLM_RESEARCH_URL", "https://research.example/lookup")
+    def fail(_url):
+        raise OSError("down")
 
-    def post(url, body):
-        assert body["symbol"] == "INFY"
-        assert body["source"] == "read_news"
-        return "Results on 2 Jan 2026."
-
-    assert _read_source("read_news", {"symbol": "INFY", "exchange": "NSE", "company_name": "INFY Ltd"}, post=post)["status"] == "ready"
+    missed = _read_source("read_filings", {"symbol": "INFY", "company_name": "Infosys"}, get=fail)
+    assert missed["status"] == "unavailable"
+    assert missed["text"] == "This source returned no text."
+    assert "Infosys" not in missed["text"]
     setup = select_setups([_retest_stock()])["setups"][0]
     setup["gtt_tradable"] = True
     monkeypatch.setenv("LLM_API_KEY", "test-key")

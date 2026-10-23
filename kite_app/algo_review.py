@@ -6,6 +6,8 @@ import json
 import os
 import urllib.request
 
+from kite_app.market_research import lookup_text
+
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_VERSION = "2023-06-01"
 DEFAULT_MODEL = "claude-sonnet-4-5"
@@ -151,42 +153,18 @@ def _post_messages(key: str, model: str, messages: list) -> dict:
         return json.loads(response.read().decode("utf-8"))
 
 
-def _read_source(name: str, facts: dict, post=None) -> dict:
-    """Return source text. An unconnected tool does not invent a filing, a story, or a case."""
+def _read_source(name: str, facts: dict, get=None) -> dict:
+    """Return source text. A failed lookup does not invent a filing, a story, or a case."""
     if name not in _TOOL_NAMES:
         return {"name": name, "status": "unavailable", "text": "This source is not connected."}
-    url = os.environ.get("LLM_RESEARCH_URL", "").strip()
-    if not url:
-        return {"name": name, "status": "unavailable", "text": "This source is not connected."}
-    body = {
-        "source": name,
-        "symbol": facts.get("symbol") or "",
-        "exchange": facts.get("exchange") or "",
-        "company_name": facts.get("company_name") or "",
-    }
     try:
-        text = (post or _post_research)(url, body)
+        text = lookup_text(name, str(facts.get("symbol") or ""), str(facts.get("company_name") or ""), get=get)
     except Exception:
         return {"name": name, "status": "unavailable", "text": "This source did not answer."}
     cleaned = str(text or "").strip()
     if not cleaned:
         return {"name": name, "status": "unavailable", "text": "This source returned no text."}
     return {"name": name, "status": "ready", "text": cleaned[:8000]}
-
-
-def _post_research(url: str, body: dict) -> str:
-    headers = {"content-type": "application/json", "accept": "text/plain, application/json"}
-    token = os.environ.get("LLM_RESEARCH_TOKEN", "").strip()
-    if token:
-        headers["authorization"] = f"Bearer {token}"
-    request = urllib.request.Request(
-        url,
-        data=json.dumps(body).encode("utf-8"),
-        headers=headers,
-        method="POST",
-    )
-    with urllib.request.urlopen(request, timeout=20) as response:
-        return response.read().decode("utf-8")
 
 
 def _research_ready(sources) -> bool:

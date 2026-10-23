@@ -61,7 +61,7 @@ def load_platform_config() -> None:
     """Fill database, encryption, and Kite app settings from Secrets Manager when they are not already set."""
     needs_db = not os.environ.get("DATABASE_URL", "").strip() or not os.environ.get("FERNET_KEY", "").strip()
     needs_kite = not os.environ.get("KITE_API_KEY", "").strip() or not os.environ.get("KITE_API_SECRET", "").strip()
-    needs_model = not os.environ.get("LLM_API_KEY", "").strip() or not os.environ.get("LLM_RESEARCH_URL", "").strip()
+    needs_model = not os.environ.get("LLM_API_KEY", "").strip()
     if not needs_db and not needs_kite and not needs_model:
         return
     secret_id = os.environ.get("KITE_DB_SECRET_ID", "").strip()
@@ -83,8 +83,6 @@ def load_platform_config() -> None:
         ("KITE_API_SECRET", "kite_api_secret"),
         ("LLM_API_KEY", "llm_api_key"),
         ("LLM_MODEL", "llm_model"),
-        ("LLM_RESEARCH_URL", "llm_research_url"),
-        ("LLM_RESEARCH_TOKEN", "llm_research_token"),
     ):
         value = str(payload.get(key) or "").strip()
         if value and not os.environ.get(env_name, "").strip():
