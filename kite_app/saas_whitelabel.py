@@ -42,7 +42,7 @@ class WhiteLabelResponse(BaseModel):
 
 
 @router.get("/config/{org_id}", response_model=WhiteLabelResponse)
-def get_whitelabel_config(org_id: str) -> dict:
+def get_whitelabel_config(org_id: str) -> WhiteLabelResponse:
     """Get white-label configuration for organization."""
     db = get_sessionmaker()()
     try:
@@ -83,7 +83,7 @@ def get_whitelabel_config(org_id: str) -> dict:
 
 
 @router.post("/config", response_model=WhiteLabelResponse)
-def update_whitelabel_config(req: WhiteLabelConfig, context: Optional[TenantContext] = None) -> dict:
+def update_whitelabel_config(req: WhiteLabelConfig) -> WhiteLabelResponse:
     """Update white-label configuration."""
     db = get_sessionmaker()()
     try:
