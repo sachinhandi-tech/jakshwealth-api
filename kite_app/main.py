@@ -88,7 +88,7 @@ class SignalRequest(BaseModel):
     long_window: int = Field(default=50, ge=3, le=400)
     trend_window: int = Field(default=200, ge=0, le=400)
     lookback_days: int = Field(default=60, ge=1, le=400)
-    max_stocks: int = Field(default=25, ge=1, le=100)
+    max_stocks: int = Field(default=100, ge=1, le=3080)
     scan_all_nse: bool = False
 
 
