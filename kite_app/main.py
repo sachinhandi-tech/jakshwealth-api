@@ -23,6 +23,11 @@ from kite_app.scanner_data import build_scanner_payload, ohlc_snapshot
 from kite_app.signals import SignalScanError
 from kite_app.request_context import platform_user_var, request_id_var
 from kite_app.ticks import hub
+from kite_app.saas_router import router as saas_router
+from kite_app.saas_subscription import router as subscription_router
+from kite_app.saas_admin import router as admin_router
+from kite_app.saas_billing import router as billing_router
+from kite_app.saas_whitelabel import router as whitelabel_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger("kite_app")
@@ -36,8 +41,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(zerodha_auth_router)
+app.include_router(saas_router)
+app.include_router(subscription_router)
+app.include_router(admin_router)
+app.include_router(billing_router)
+app.include_router(whitelabel_router)
 service = KiteService()
-
 
 @app.middleware("http")
 async def bind_request_context(request: Request, call_next):
