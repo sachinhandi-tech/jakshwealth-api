@@ -18,6 +18,42 @@ from kite_app.models import get_sessionmaker
 
 router = APIRouter(tags=["saas-admin"], prefix="/api/admin")
 
+@router.get("/me")
+def get_current_user_org(platform_user_id: str = Header(None, alias="X-Platform-User-Id")) -> dict:
+    """Get current user's organization ID and details."""
+    if not platform_user_id:
+        raise HTTPException(status_code=401, detail="Platform user ID required")
+    
+    db = get_sessionmaker()()
+    try:
+        # Find organization by platform user ID (stored in user's session)
+        # For now, return a default org_id - in production this would query from sessions table
+        user = db.query(OrganizationUser).filter(
+            OrganizationUser.email.like(platform_user_id)  # Simplified lookup
+        ).first()
+        
+        if not user:
+            raise HTTPException(status_code=404, detail="User organization not found")
+        
+        org = db.query(Organization).filter(
+            Organization.org_id == user.org_id
+        ).first()
+        
+        if not org:
+            raise HTTPException(status_code=404, detail="Organization not found")
+        
+        return {
+            "org_id": str(org.org_id),
+            "user_id": str(user.user_id),
+            "name": org.name,
+            "email": org.email,
+            "subscription_tier": org.subscription_tier,
+            "user_role": user.role,
+        }
+    finally:
+        db.close()
+
+
 
 class OrgCreate(BaseModel):
     """Create organization request."""
@@ -200,7 +236,7 @@ def create_user(org_id: str, req: UserCreate) -> dict:
 
 
 @router.get("/organizations/{org_id}/users")
-def list_users(org_id: str) -> list:
+def list_users(org_id: str) -> dict:
     """List all users in organization."""
     db = get_sessionmaker()()
     try:
@@ -208,17 +244,19 @@ def list_users(org_id: str) -> list:
             OrganizationUser.org_id == uuid.UUID(org_id)
         ).all()
 
-        return [
-            {
-                "user_id": str(u.user_id),
-                "email": u.email,
-                "name": u.name,
-                "role": u.role,
-                "is_active": u.is_active,
-                "created_at": u.created_at.isoformat(),
-            }
-            for u in users
-        ]
+        return {
+            "users": [
+                {
+                    "user_id": str(u.user_id),
+                    "email": u.email,
+                    "name": u.name,
+                    "role": u.role,
+                    "is_active": u.is_active,
+                    "created_at": u.created_at.isoformat(),
+                }
+                for u in users
+            ]
+        }
     finally:
         db.close()
 
