@@ -21,7 +21,7 @@ from kite_app.session_manager import encrypt_access_token
 from kite_app.signals import SignalScanError, scan_nifty100
 
 logger = logging.getLogger("kite_app.scan")
-ASYNC_SCAN_BUDGET_SECONDS = 100
+ASYNC_SCAN_BUDGET_SECONDS = 600
 _MEMORY: dict[str, dict] = {}
 
 
@@ -72,7 +72,9 @@ def run_scan_job(job_id: str) -> None:
         kite = KiteConnect(api_key=secret["api_key"])
         kite.set_access_token(secret["access_token"])
         params = json.loads(row["request_json"])
-        result = scan_nifty100(kite, budget_seconds=ASYNC_SCAN_BUDGET_SECONDS, **params)
+        scan_all_nse = params.get("scan_all_nse", False)
+        budget = 1200 if scan_all_nse else ASYNC_SCAN_BUDGET_SECONDS
+        result = scan_nifty100(kite, budget_seconds=budget, **params)
         _finish(job_id, "done", json.dumps(result), None)
     except SignalScanError as exc:
         _finish(job_id, "error", None, str(exc))
