@@ -204,12 +204,13 @@ class KiteService:
         long_type: Optional[str] = None,
         trend_window: int = 0,
         scan_mode: str = "crossover",
+        scan_all_nse: bool = False,
     ) -> dict:
         kite = self._require_client()
         try:
             return scan_nifty100(kite, **self.scan_params(
                 short_window, long_window, lookback_days, max_stocks,
-                ma_type, short_type, long_type, trend_window, scan_mode,
+                ma_type, short_type, long_type, trend_window, scan_mode, scan_all_nse,
             ))
         except KiteException as exc:
             if isinstance(exc, TokenException):
@@ -227,6 +228,7 @@ class KiteService:
         long_type: Optional[str] = None,
         trend_window: int = 0,
         scan_mode: str = "crossover",
+        scan_all_nse: bool = False,
     ) -> dict:
         fast_type = short_type or ma_type
         slow_type = long_type or ma_type
@@ -255,6 +257,7 @@ class KiteService:
             "long_type": slow_type,
             "trend_window": trend_window,
             "scan_mode": scan_mode,
+            "scan_all_nse": scan_all_nse,
         }
 
     def saved_session(self) -> Optional[dict]:

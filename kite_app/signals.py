@@ -1,4 +1,4 @@
-"""Nifty 100 daily moving-average crossover scan. Uses Kite candles and the official index CSV."""
+"""Daily moving-average crossover scan. Supports Nifty 100 or all 3080 NSE equities. Uses Kite candles."""
 
 from __future__ import annotations
 
@@ -203,10 +203,11 @@ def scan_nifty100(
     trend_window: int = 0,
     scan_mode: str = "crossover",
     budget_seconds: Optional[float] = None,
+    scan_all_nse: bool = False,
 ) -> dict:
     deadline = time.monotonic() + (SCAN_BUDGET_SECONDS if budget_seconds is None else budget_seconds)
-    constituents = load_nifty100()
     tokens = nse_equity_tokens(kite)
+    constituents = load_nse_all_stocks(tokens) if scan_all_nse else load_nifty100()
     end = datetime.now()
     history_window = max(long_window, trend_window)
     calendar_days = int((lookback_days + history_window + 5) * 1.8) + 10
@@ -296,6 +297,16 @@ def load_nifty100() -> list[dict]:
         _constituent_cache = (now, rows)
         return rows
     raise SignalScanError(last_error)
+
+
+def load_nse_all_stocks(tokens: dict[str, int]) -> list[dict]:
+    """Extract all NSE equities from the tokens dictionary."""
+    constituents = []
+    for symbol in sorted(tokens.keys()):
+        constituents.append({"ticker": symbol, "company": symbol})
+    if not constituents:
+        raise SignalScanError("No NSE equity instruments found.")
+    return constituents
 
 
 def nse_equity_tokens(kite) -> dict[str, int]:

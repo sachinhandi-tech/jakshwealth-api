@@ -89,6 +89,7 @@ class SignalRequest(BaseModel):
     trend_window: int = Field(default=200, ge=0, le=400)
     lookback_days: int = Field(default=60, ge=1, le=400)
     max_stocks: int = Field(default=25, ge=1, le=100)
+    scan_all_nse: bool = False
 
 
 class SignalRow(BaseModel):
@@ -239,6 +240,7 @@ def signals(body: SignalRequest) -> JSONResponse:
             body.long_type,
             body.trend_window,
             body.scan_mode,
+            body.scan_all_nse,
         )
         job_id = enqueue_scan(record, params)
     except SignalScanError as exc:
