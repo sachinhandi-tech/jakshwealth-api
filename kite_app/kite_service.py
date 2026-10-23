@@ -245,8 +245,9 @@ class KiteService:
             raise SignalScanError("The long-term SMA period must be between 2 and 400.")
         if not 1 <= lookback_days <= 400:
             raise SignalScanError("Lookback days must be between 1 and 400.")
-        if not 1 <= max_stocks <= 100:
-            raise SignalScanError("Max stocks must be between 1 and 100.")
+        max_limit = 3080 if scan_all_nse else 100
+        if not 1 <= max_stocks <= max_limit:
+            raise SignalScanError(f"Max stocks must be between 1 and {max_limit}.")
         return {
             "short_window": short_window,
             "long_window": long_window,
