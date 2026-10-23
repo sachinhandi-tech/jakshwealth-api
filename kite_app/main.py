@@ -429,3 +429,143 @@ def get_perf_metrics() -> dict:
         }
     finally:
         db.close()
+
+
+# ============================================================================
+# App Config Endpoint - Consolidated from Lambda jw_app_config
+# ============================================================================
+
+@app.get("/jw-api/app-config")
+async def get_app_config() -> dict:
+    """Public application configuration (feature flags, version, environment)."""
+    import os
+    import sys
+    sys.path.insert(0, "lambda/jw_app_config")
+    try:
+        import feature_flags as app_flags
+    except ImportError:
+        # Fallback if Lambda code not available
+        app_flags = None
+    
+    def _features():
+        if app_flags is None:
+            return {"stockAnalysis": True, "aiChat": False}
+        try:
+            return app_flags.load_feature_flags()
+        except Exception:
+            return app_flags.default_feature_flags() if hasattr(app_flags, 'default_feature_flags') else {"stockAnalysis": True, "aiChat": False}
+    
+    def _can_manage_ai_chat():
+        if app_flags is None:
+            return False
+        return app_flags.can_manage_ai_chat() if hasattr(app_flags, 'can_manage_ai_chat') else False
+    
+    return {
+        "appName": "JakshWealth",
+        "version": os.environ.get("APP_VERSION", "0.1.0"),
+        "environment": (os.environ.get("ENVIRONMENT") or "dev").strip().lower(),
+        "features": _features(),
+        "enableAiChat": _can_manage_ai_chat(),
+    }
+
+
+# ============================================================================
+# Secure Data Endpoints - Consolidated from Lambda jw_secure_data
+# ============================================================================
+
+@app.api_route("/jw-api/secure-data", methods=["GET", "POST"])
+@app.api_route("/jw-api/secure-data/{path:path}", methods=["GET", "POST", "OPTIONS"])
+async def secure_data_handler(request: Request, path: str = ""):
+    """Protected endpoints with authorization context and feature dispatch."""
+    import os
+    import sys
+    from datetime import datetime, timezone
+    
+    # Add Lambda paths to sys.path
+    for lambda_path in ["lambda/jw_secure_data", "lambda/jw_app_config"]:
+        if lambda_path not in sys.path:
+            sys.path.insert(0, lambda_path)
+    
+    try:
+        import feature_flags as secure_flags
+        from features import FEATURE_ROUTES
+        from routing import dispatch_feature_routes, route_suffix as get_route_suffix
+    except ImportError as e:
+        logger.warning(f"Secure data features not available: {e}")
+        return JSONResponse(
+            {"error": "Secure data service unavailable"},
+            status_code=503
+        )
+    
+    method = request.method
+    
+    # Handle OPTIONS
+    if method == "OPTIONS":
+        return JSONResponse(
+            {},
+            headers={
+                "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+                "Access-Control-Allow-Headers": "*",
+            }
+        )
+    
+    # Extract authorization from headers or AWS context
+    authorizer = {}
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        try:
+            import json as json_lib
+            # Try to parse JWT or custom auth
+            authorizer = {"principalId": auth_header[7:]}
+        except Exception:
+            pass
+    
+    # Also check x-platform-user-id header
+    platform_user_id = request.headers.get("x-platform-user-id", "")
+    if platform_user_id:
+        authorizer["principalId"] = platform_user_id
+    
+    # For internal job handling
+    if method in ("POST",):
+        try:
+            body = await request.json()
+            if body.get("internal") == "stock_scan_job":
+                job_id = str(body.get("jobId", "")).strip()
+                if job_id:
+                    from kite_app.scan_jobs import run_scan_job
+                    run_scan_job(job_id)
+                    return JSONResponse({"ok": True})
+        except Exception:
+            pass
+    
+    # Get route suffix
+    suffix = path.lstrip("/") if path else ""
+    
+    # Basic secure data response if no suffix
+    if not suffix or suffix == "/":
+        return JSONResponse({
+            "message": "You reached the protected secure-data endpoint.",
+            "principalId": authorizer.get("principalId", ""),
+            "servedAt": datetime.now(timezone.utc).isoformat(),
+        })
+    
+    # Try feature routing
+    try:
+        feature_response = dispatch_feature_routes(
+            FEATURE_ROUTES,
+            suffix=suffix,
+            event={"path": f"/jw-api/secure-data/{suffix}"},
+            trace=None,
+            authorizer=authorizer,
+            method=method,
+        )
+        if feature_response is not None:
+            return JSONResponse(feature_response)
+    except Exception as e:
+        logger.debug(f"Feature routing failed for {suffix}: {e}")
+    
+    return JSONResponse(
+        {"error": f"Unknown secure-data route: {suffix}"},
+        status_code=400
+    )
+
