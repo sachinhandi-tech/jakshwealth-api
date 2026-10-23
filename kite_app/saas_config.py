@@ -1,6 +1,6 @@
 """Subscription tier definitions and feature access matrix."""
 
-from typing import Dict, Any
+from typing import Dict, Any, Union
 
 
 TIER_LIMITS = {
@@ -60,7 +60,7 @@ def has_white_label(tier: str) -> bool:
     return get_tier_config(tier)["white_label"]
 
 
-def get_max_users(tier: str) -> int | float:
+def get_max_users(tier: str) -> Union[int, float]:
     """Get max users allowed for tier."""
     return get_tier_config(tier)["max_users"]
 
