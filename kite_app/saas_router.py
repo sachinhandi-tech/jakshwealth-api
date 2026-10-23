@@ -55,17 +55,56 @@ def _organization_user(db, platform_user_id: uuid.UUID) -> Optional[Organization
     if linked is not None:
         return linked
     email = _identity_email(platform_user_id)
-    if not email:
-        return None
-    match = db.query(OrganizationUser).filter(OrganizationUser.email == email).first()
-    if match is None:
-        return None
-    if match.platform_user_id is None:
-        match.platform_user_id = platform_user_id
-        db.commit()
-    elif match.platform_user_id != platform_user_id:
-        return None
-    return match
+    if email:
+        match = db.query(OrganizationUser).filter(OrganizationUser.email == email).first()
+        if match is not None and match.platform_user_id in (None, platform_user_id):
+            match.platform_user_id = platform_user_id
+            db.commit()
+            return match
+    return _open_account(db, platform_user_id, email)
+
+
+def _open_account(db, platform_user_id: uuid.UUID, email: Optional[str]) -> OrganizationUser:
+    """Open a free organization for a desk login that does not have one yet."""
+    address = email or f"{platform_user_id}@desk.local"
+    label = address.split("@", 1)[0] or "Desk"
+    now = datetime.now()
+    org = Organization(
+        org_id=uuid.uuid4(),
+        name=label,
+        email=address,
+        slug=f"{''.join(ch if ch.isalnum() else '-' for ch in label.lower())[:80] or 'desk'}-{uuid.uuid4().hex[:8]}",
+        subscription_tier=SubscriptionTier.FREE,
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(org)
+    db.add(Subscription(
+        subscription_id=uuid.uuid4(),
+        org_id=org.org_id,
+        tier=SubscriptionTier.FREE,
+        status="active",
+        start_date=now.date(),
+        auto_renew=True,
+        billing_cycle="monthly",
+        created_at=now,
+        updated_at=now,
+    ))
+    member = OrganizationUser(
+        user_id=uuid.uuid4(),
+        org_id=org.org_id,
+        email=address,
+        name=label,
+        role="admin",
+        is_active=True,
+        platform_user_id=platform_user_id,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(member)
+    db.commit()
+    return member
 
 
 @router.get("/me")
