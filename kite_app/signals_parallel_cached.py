@@ -154,7 +154,8 @@ def scan_nifty100_parallel_cached(
 
         tokens = nse_equity_tokens(kite)
         stock_tokens = {}
-        for symbol in constituents:
+        for constituent in constituents:
+            symbol = constituent["ticker"]
             if symbol in tokens:
                 stock_tokens[symbol] = tokens[symbol]
 
@@ -207,10 +208,13 @@ def scan_nifty100_parallel_cached(
 
         elapsed = time.monotonic() - start_time
         
-        # Get cache stats
-        from kite_app.signals_cache import CacheStats
-        cache_stats = CacheStats(db)
-        cache_info = cache_stats.get_stats()
+        # Get cache stats (with error handling)
+        try:
+            from kite_app.signals_cache import CacheStats
+            cache_stats = CacheStats(db)
+            cache_info = cache_stats.get_stats()
+        except Exception:
+            cache_info = {"cached_stocks": 0, "total_candles": 0, "api_calls_saved": 0}
 
         return {
             "scan_mode": str(scan_mode),
