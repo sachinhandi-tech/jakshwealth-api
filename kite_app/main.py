@@ -396,3 +396,36 @@ def algo_live_gtt(body: LiveGttRequest) -> dict:
         raise _auth_error(exc) from exc
 
 
+
+
+@app.get("/api/kite/scan/{job_id}/progress")
+def get_scan_progress(job_id: str) -> dict:
+    """Get real-time scan progress (percentage, ETA, cache hits)."""
+    from kite_app.scan_progress import get_progress
+    from kite_app.models import get_sessionmaker
+    
+    db = get_sessionmaker()()
+    try:
+        progress = get_progress(db, job_id)
+        if not progress:
+            raise HTTPException(status_code=404, detail="Scan job not found")
+        return progress
+    finally:
+        db.close()
+
+
+@app.get("/api/kite/performance/metrics")
+def get_performance_metrics() -> dict:
+    """Get historical scan performance metrics (last 10 scans)."""
+    from kite_app.scan_progress import get_performance_metrics
+    from kite_app.models import get_sessionmaker
+    
+    db = get_sessionmaker()()
+    try:
+        metrics = get_performance_metrics(db, limit=10)
+        return {
+            "scans": metrics,
+            "latest": metrics[0] if metrics else None,
+        }
+    finally:
+        db.close()
