@@ -92,16 +92,29 @@ def _scan_stock_cached(
         if trend_sma and trend_sma[-1] is not None:
             trend_bias = "above" if close > trend_sma[-1] else "below"
 
+        # Extract and serialize crossover date
+        last_candle = candles[-1]
+        if isinstance(last_candle, dict):
+            crossover_date = last_candle.get("date")
+        else:
+            crossover_date = last_candle["date"]
+        
+        # Ensure it's a string
+        if hasattr(crossover_date, 'isoformat'):
+            crossover_date = crossover_date.isoformat()
+        else:
+            crossover_date = str(crossover_date)
+
         return {
-            "ticker": ticker,
-            "company": company,
-            "crossover_type": crossover_type or "no_crossover",
-            "close": close,
-            "short_ma": short_ma[-1],
-            "long_ma": long_ma[-1],
-            "trend_sma": trend_sma[-1] if trend_sma else None,
-            "trend_bias": trend_bias,
-            "crossover_date": candles[-1]["date"],
+            "ticker": str(ticker),
+            "company": str(company),
+            "crossover_type": str(crossover_type or "no_crossover"),
+            "close": float(close),
+            "short_ma": float(short_ma[-1]),
+            "long_ma": float(long_ma[-1]),
+            "trend_sma": float(trend_sma[-1]) if trend_sma and trend_sma[-1] is not None else None,
+            "trend_bias": str(trend_bias) if trend_bias else None,
+            "crossover_date": crossover_date,
         }
     except Exception:
         return None
@@ -200,20 +213,20 @@ def scan_nifty100_parallel_cached(
         cache_info = cache_stats.get_stats()
 
         return {
-            "scan_mode": scan_mode,
-            "ma_type": ma_type,
-            "short_type": short_type,
-            "long_type": long_type,
-            "short_window": short_window,
-            "long_window": long_window,
-            "trend_window": trend_window,
-            "lookback_days": lookback_days,
-            "universe": universe_count,
-            "scanned": scanned,
-            "skipped": skipped,
+            "scan_mode": str(scan_mode),
+            "ma_type": str(ma_type),
+            "short_type": str(short_type),
+            "long_type": str(long_type),
+            "short_window": int(short_window),
+            "long_window": int(long_window),
+            "trend_window": int(trend_window),
+            "lookback_days": int(lookback_days),
+            "universe": int(universe_count),
+            "scanned": int(scanned),
+            "skipped": int(skipped),
             "signals": signals,
-            "elapsed_seconds": round(elapsed, 2),
-            "workers": MAX_WORKERS,
+            "elapsed_seconds": round(float(elapsed), 2),
+            "workers": int(MAX_WORKERS),
             "cache": cache_info,
         }
     except (KiteException, TokenException) as exc:
