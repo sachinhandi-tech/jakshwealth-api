@@ -114,7 +114,7 @@ def test_scan_job_result_omits_the_access_token(monkeypatch):
     monkeypatch.delenv("AWS_LAMBDA_FUNCTION_NAME", raising=False)
     monkeypatch.setattr("kite_app.scan_jobs._start", lambda job_id: None)
     monkeypatch.setattr(
-        "kite_app.scan_jobs.scan_nifty100",
+        "kite_app.scan_jobs.scan_nifty100_parallel_cached",
         lambda kite, **kwargs: {"signals": [], "scanned": 1, "universe": 1, "skipped": 0},
     )
     job_id = enqueue_scan(

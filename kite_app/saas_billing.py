@@ -58,8 +58,8 @@ def get_invoice(invoice_id: str) -> dict:
             "amount": float(invoice.amount),
             "currency": invoice.currency,
             "status": invoice.status,
-            "billing_date": invoice.created_at.date().isoformat(),
-            "due_date": (invoice.created_at.date() + timedelta(days=30)).isoformat(),
+            "billing_date": invoice.issued_at.date().isoformat(),
+            "due_date": invoice.due_date.isoformat(),
             "payment_method": invoice.payment_method,
             "transaction_id": invoice.transaction_id,
         }
@@ -95,6 +95,8 @@ def create_invoice(req: CreateInvoiceRequest) -> dict:
         if sub.billing_cycle == "yearly":
             amount *= 12
 
+        period_start = datetime.now().date()
+        period_end = period_start + timedelta(days=365 if sub.billing_cycle == "yearly" else 30)
         billing = BillingRecord(
             billing_id=uuid.uuid4(),
             subscription_id=sub.subscription_id,
@@ -102,8 +104,11 @@ def create_invoice(req: CreateInvoiceRequest) -> dict:
             invoice_number=invoice_num,
             amount=amount,
             currency="INR",
+            billing_period_start=period_start,
+            billing_period_end=period_end,
             status="pending",
-            created_at=datetime.now(),
+            issued_at=datetime.now(),
+            due_date=period_end,
         )
         db.add(billing)
         db.commit()
@@ -120,9 +125,11 @@ def create_invoice(req: CreateInvoiceRequest) -> dict:
             "payment_method": None,
             "transaction_id": None,
         }
-    except Exception as e:
+    except HTTPException:
+        raise
+    except Exception:
         db.rollback()
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail="Request could not be completed")
     finally:
         db.close()
 
@@ -145,7 +152,7 @@ def record_payment(invoice_id: str, payment_method: str, transaction_id: str) ->
         invoice.status = "paid"
         invoice.payment_method = payment_method
         invoice.transaction_id = transaction_id
-        invoice.updated_at = datetime.now()
+        invoice.payment_date = datetime.now().date()
 
         db.commit()
 
@@ -156,9 +163,11 @@ def record_payment(invoice_id: str, payment_method: str, transaction_id: str) ->
             "transaction_id": transaction_id,
             "paid_at": datetime.now().isoformat(),
         }
-    except Exception as e:
+    except HTTPException:
+        raise
+    except Exception:
         db.rollback()
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail="Request could not be completed")
     finally:
         db.close()
 
@@ -170,7 +179,7 @@ def list_org_invoices(org_id: str, limit: int = 50) -> list:
     try:
         invoices = db.query(BillingRecord).filter(
             BillingRecord.org_id == uuid.UUID(org_id)
-        ).order_by(BillingRecord.created_at.desc()).limit(limit).all()
+        ).order_by(BillingRecord.issued_at.desc()).limit(limit).all()
 
         return [
             {
@@ -178,7 +187,7 @@ def list_org_invoices(org_id: str, limit: int = 50) -> list:
                 "amount": float(inv.amount),
                 "currency": inv.currency,
                 "status": inv.status,
-                "billing_date": inv.created_at.date().isoformat(),
+                "billing_date": inv.issued_at.date().isoformat(),
                 "payment_method": inv.payment_method,
                 "transaction_id": inv.transaction_id,
             }
@@ -239,8 +248,11 @@ def process_recurring_billing() -> dict:
                     invoice_number=invoice_num,
                     amount=amount,
                     currency="INR",
+                    billing_period_start=today,
+                    billing_period_end=new_end_date,
                     status="pending",
-                    created_at=datetime.now(),
+                    issued_at=datetime.now(),
+                    due_date=new_end_date,
                 )
                 db.add(billing)
                 results["invoices_created"].append(invoice_num)

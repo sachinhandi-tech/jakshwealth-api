@@ -107,16 +107,16 @@ def update_whitelabel_config(req: WhiteLabelConfig) -> WhiteLabelResponse:
 
         if not config:
             config = WhiteLabel(
-                whitelabel_id=uuid.uuid4(),
+                label_id=uuid.uuid4(),
                 org_id=org.org_id,
                 company_name=req.company_name,
                 logo_url=req.logo_url,
-                primary_color=req.primary_color,
-                secondary_color=req.secondary_color,
+                primary_color=req.primary_color or "#00d4ff",
+                secondary_color=req.secondary_color or "#1a1a2e",
                 custom_domain=req.custom_domain,
-                support_email=req.support_email,
+                support_email=req.support_email or org.email,
                 privacy_policy_url=req.privacy_policy_url,
-                terms_of_service_url=req.terms_of_service_url,
+                terms_url=req.terms_of_service_url,
                 created_at=datetime.now(),
                 updated_at=datetime.now(),
             )
@@ -136,7 +136,7 @@ def update_whitelabel_config(req: WhiteLabelConfig) -> WhiteLabelResponse:
             if req.privacy_policy_url:
                 config.privacy_policy_url = req.privacy_policy_url
             if req.terms_of_service_url:
-                config.terms_of_service_url = req.terms_of_service_url
+                config.terms_url = req.terms_of_service_url
             config.updated_at = datetime.now()
 
         db.commit()
@@ -150,9 +150,11 @@ def update_whitelabel_config(req: WhiteLabelConfig) -> WhiteLabelResponse:
             "custom_domain": config.custom_domain,
             "support_email": config.support_email,
         }
-    except Exception as e:
+    except HTTPException:
+        raise
+    except Exception:
         db.rollback()
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail="Request could not be completed")
     finally:
         db.close()
 

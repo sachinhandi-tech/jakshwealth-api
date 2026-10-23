@@ -149,9 +149,11 @@ def upgrade_subscription(org_id: str, req: UpgradeRequest) -> dict:
             "auto_renew": new_sub.auto_renew,
             "billing_cycle": new_sub.billing_cycle,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=type(e).__name__)
     finally:
         db.close()
 
@@ -216,9 +218,11 @@ def cancel_subscription(org_id: str) -> dict:
             "message": "Subscription cancelled and downgraded to FREE tier",
             "new_tier": SubscriptionTier.FREE,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=type(e).__name__)
     finally:
         db.close()
 

@@ -23,11 +23,12 @@ def recent_signals() -> list[dict]:
 def _save_to_database(payload: dict) -> None:
     """Persist algo signal to database for history and backtesting."""
     try:
+        from kite_app.persistence import trading_session
         from kite_app.trading_models import AlgoSignalRecord
-        from kite_app.models import get_sessionmaker
-        
-        db = get_sessionmaker()()
+
+        db = trading_session()
         try:
+            AlgoSignalRecord.__table__.create(db.get_bind(), checkfirst=True)
             signal = AlgoSignalRecord(
                 signal_id=uuid.uuid4(),
                 platform_user_id=None,  # Would be set from context
@@ -43,7 +44,6 @@ def _save_to_database(payload: dict) -> None:
             db.commit()
         finally:
             db.close()
-    except Exception as e:
-        # Log error but don't fail - keep memory-only fallback
+    except Exception as exc:
         import logging
-        logging.getLogger("kite_app.inbox").exception("Failed to save algo signal to database")
+        logging.getLogger("kite_app.inbox").info("algo signal was not stored %s", type(exc).__name__)

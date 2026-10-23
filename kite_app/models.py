@@ -99,7 +99,12 @@ def get_sessionmaker() -> sessionmaker:
         Base.metadata.create_all(engine)
         
         from kite_app.saas_models import SaasBase
+        from kite_app.scan_progress import ProgressBase
+        from kite_app.signals_cache import CacheBase
+
         SaasBase.metadata.create_all(engine)
+        ProgressBase.metadata.create_all(engine)
+        CacheBase.metadata.create_all(engine)
         
         _SESSIONMAKER = sessionmaker(bind=engine, expire_on_commit=False)
     return _SESSIONMAKER

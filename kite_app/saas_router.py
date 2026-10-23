@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Depends, Header
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel
 
 from kite_app.saas_models import (
     Organization, OrganizationUser, Subscription, SubscriptionTier,
@@ -18,26 +18,68 @@ from kite_app.models import get_sessionmaker
 
 router = APIRouter(tags=["saas-admin"], prefix="/api/admin")
 
+def _platform_user_uuid(value: Optional[str]) -> uuid.UUID:
+    if not value:
+        raise HTTPException(status_code=401, detail="Platform user ID required")
+    try:
+        return uuid.UUID(value)
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Platform user ID required") from None
+
+
+def _identity_email(platform_user_id: uuid.UUID) -> Optional[str]:
+    try:
+        from kite_app.identity_models import IdentityUser
+        from kite_app.persistence import identity_session
+    except Exception:
+        return None
+    try:
+        db = identity_session()
+    except Exception:
+        return None
+    try:
+        user = db.get(IdentityUser, platform_user_id)
+        if user is None or not user.is_active:
+            return None
+        return user.email
+    except Exception:
+        return None
+    finally:
+        db.close()
+
+
+def _organization_user(db, platform_user_id: uuid.UUID) -> Optional[OrganizationUser]:
+    linked = db.query(OrganizationUser).filter(
+        OrganizationUser.platform_user_id == platform_user_id
+    ).first()
+    if linked is not None:
+        return linked
+    email = _identity_email(platform_user_id)
+    if not email:
+        return None
+    match = db.query(OrganizationUser).filter(OrganizationUser.email == email).first()
+    if match is None:
+        return None
+    if match.platform_user_id is None:
+        match.platform_user_id = platform_user_id
+        db.commit()
+    elif match.platform_user_id != platform_user_id:
+        return None
+    return match
+
+
 @router.get("/me")
 def get_current_user_org(platform_user_id: str = Header(None, alias="X-Platform-User-Id")) -> dict:
-    """Get current user's organization ID and details."""
-    if not platform_user_id:
-        raise HTTPException(status_code=401, detail="Platform user ID required")
-    
+    """Get the organization linked to this desk account."""
+    account_id = _platform_user_uuid(platform_user_id)
     db = get_sessionmaker()()
     try:
-        # Return first org for now - in production would use platform_user_id to look up user
-        org = db.query(Organization).first()
-        if not org:
-            raise HTTPException(status_code=404, detail="No organization found")
-        
-        user = db.query(OrganizationUser).filter(
-            OrganizationUser.org_id == org.org_id
-        ).first()
-        
-        if not user:
-            raise HTTPException(status_code=404, detail="No user found in organization")
-        
+        user = _organization_user(db, account_id)
+        if user is None:
+            raise HTTPException(status_code=404, detail="No organization is linked to this account")
+        org = db.query(Organization).filter(Organization.org_id == user.org_id).first()
+        if org is None:
+            raise HTTPException(status_code=404, detail="No organization is linked to this account")
         return {
             "org_id": str(org.org_id),
             "user_id": str(user.user_id),
@@ -49,7 +91,7 @@ def get_current_user_org(platform_user_id: str = Header(None, alias="X-Platform-
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=type(e).__name__)
     finally:
         db.close()
 
@@ -64,7 +106,7 @@ def admin_health() -> dict:
 class OrgCreate(BaseModel):
     """Create organization request."""
     name: str
-    email: EmailStr
+    email: str
     admin_name: str
 
 
@@ -81,7 +123,7 @@ class OrgResponse(BaseModel):
 
 class UserCreate(BaseModel):
     """Create organization user request."""
-    email: EmailStr
+    email: str
     name: str
     role: str = "member"  # admin, member, viewer
 
@@ -162,9 +204,11 @@ def create_organization(req: OrgCreate) -> dict:
             "is_active": org.is_active,
             "created_at": org.created_at.isoformat(),
         }
+    except HTTPException:
+        raise
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=type(e).__name__)
     finally:
         db.close()
 
@@ -246,9 +290,11 @@ def create_user(org_id: str, req: UserCreate) -> dict:
             "is_active": user.is_active,
             "created_at": user.created_at.isoformat(),
         }
+    except HTTPException:
+        raise
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=type(e).__name__)
     finally:
         db.close()
 
@@ -319,9 +365,11 @@ def update_user(org_id: str, user_id: str, is_active: Optional[bool] = None, rol
             "is_active": user.is_active,
             "created_at": user.created_at.isoformat(),
         }
+    except HTTPException:
+        raise
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=type(e).__name__)
     finally:
         db.close()
 
@@ -331,6 +379,29 @@ def update_user(org_id: str, user_id: str, is_active: Optional[bool] = None, rol
 def admin_health() -> dict:
     """Health check for admin API."""
     return {"status": "ok", "service": "saas-admin"}
+
+@router.delete("/organizations/{org_id}/users/{user_id}")
+def remove_user(org_id: str, user_id: str) -> dict:
+    """Remove a member from the organization."""
+    db = get_sessionmaker()()
+    try:
+        user = db.query(OrganizationUser).filter(
+            OrganizationUser.user_id == uuid.UUID(user_id),
+            OrganizationUser.org_id == uuid.UUID(org_id),
+        ).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        db.delete(user)
+        db.commit()
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="User could not be removed")
+    finally:
+        db.close()
+
 
 @router.get("/organizations/{org_id}/limits")
 def get_org_limits(org_id: str) -> dict:
@@ -344,9 +415,10 @@ def get_org_limits(org_id: str) -> dict:
             raise HTTPException(status_code=404, detail="Organization not found")
 
         config = get_tier_config(org.subscription_tier)
+        safe = {key: None if value == float("inf") else value for key, value in config.items()}
         return {
             "tier": org.subscription_tier,
-            **config,
+            **safe,
         }
     finally:
         db.close()

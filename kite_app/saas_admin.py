@@ -74,7 +74,7 @@ def get_dashboard_stats() -> dict:
         month_start = date(today.year, today.month, 1)
         
         total_revenue = db.query(func.sum(BillingRecord.amount)).filter(
-            BillingRecord.created_at >= month_start,
+            BillingRecord.issued_at >= month_start,
             BillingRecord.status == "paid",
         ).scalar() or 0
 
