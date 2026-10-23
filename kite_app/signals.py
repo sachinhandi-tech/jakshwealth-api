@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 import time
 from datetime import date, datetime, timedelta
 from typing import Optional
@@ -321,11 +322,12 @@ def nse_equity_tokens(kite) -> dict[str, int]:
     except KiteException as exc:
         raise SignalScanError("Kite could not load NSE instruments.") from exc
     tokens = {}
+    equity_pattern = re.compile(r"^[A-Z][A-Z0-9\-]*$")
     for instrument in instruments:
         if instrument.get("exchange") == "NSE" and instrument.get("instrument_type") == "EQ":
             symbol = str(instrument.get("tradingsymbol") or "").strip()
             token = instrument.get("instrument_token")
-            if symbol and token is not None:
+            if symbol and token is not None and equity_pattern.match(symbol):
                 tokens[symbol] = int(token)
     if not tokens:
         raise SignalScanError("Kite returned no NSE equity instruments.")
