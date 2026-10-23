@@ -55,6 +55,12 @@ def get_current_user_org(platform_user_id: str = Header(None, alias="X-Platform-
 
 
 
+@router.get("/health")
+def admin_health() -> dict:
+    """Health check for admin API."""
+    return {"status": "ok", "service": "saas-admin"}
+
+
 class OrgCreate(BaseModel):
     """Create organization request."""
     name: str
@@ -163,6 +169,12 @@ def create_organization(req: OrgCreate) -> dict:
         db.close()
 
 
+
+@router.get("/health")
+def admin_health() -> dict:
+    """Health check for admin API."""
+    return {"status": "ok", "service": "saas-admin"}
+
 @router.get("/organizations/{org_id}", response_model=OrgResponse)
 def get_organization(org_id: str) -> dict:
     """Get organization details."""
@@ -186,6 +198,12 @@ def get_organization(org_id: str) -> dict:
     finally:
         db.close()
 
+
+
+@router.get("/health")
+def admin_health() -> dict:
+    """Health check for admin API."""
+    return {"status": "ok", "service": "saas-admin"}
 
 @router.post("/organizations/{org_id}/users", response_model=UserResponse)
 def create_user(org_id: str, req: UserCreate) -> dict:
@@ -235,6 +253,12 @@ def create_user(org_id: str, req: UserCreate) -> dict:
         db.close()
 
 
+
+@router.get("/health")
+def admin_health() -> dict:
+    """Health check for admin API."""
+    return {"status": "ok", "service": "saas-admin"}
+
 @router.get("/organizations/{org_id}/users")
 def list_users(org_id: str) -> dict:
     """List all users in organization."""
@@ -260,6 +284,12 @@ def list_users(org_id: str) -> dict:
     finally:
         db.close()
 
+
+
+@router.get("/health")
+def admin_health() -> dict:
+    """Health check for admin API."""
+    return {"status": "ok", "service": "saas-admin"}
 
 @router.patch("/organizations/{org_id}/users/{user_id}")
 def update_user(org_id: str, user_id: str, is_active: Optional[bool] = None, role: Optional[str] = None) -> dict:
@@ -295,6 +325,12 @@ def update_user(org_id: str, user_id: str, is_active: Optional[bool] = None, rol
     finally:
         db.close()
 
+
+
+@router.get("/health")
+def admin_health() -> dict:
+    """Health check for admin API."""
+    return {"status": "ok", "service": "saas-admin"}
 
 @router.get("/organizations/{org_id}/limits")
 def get_org_limits(org_id: str) -> dict:
