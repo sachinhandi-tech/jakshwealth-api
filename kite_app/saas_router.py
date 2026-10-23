@@ -26,21 +26,17 @@ def get_current_user_org(platform_user_id: str = Header(None, alias="X-Platform-
     
     db = get_sessionmaker()()
     try:
-        # Find organization by platform user ID (stored in user's session)
-        # For now, return a default org_id - in production this would query from sessions table
+        # Return first org for now - in production would use platform_user_id to look up user
+        org = db.query(Organization).first()
+        if not org:
+            raise HTTPException(status_code=404, detail="No organization found")
+        
         user = db.query(OrganizationUser).filter(
-            OrganizationUser.email.like(platform_user_id)  # Simplified lookup
+            OrganizationUser.org_id == org.org_id
         ).first()
         
         if not user:
-            raise HTTPException(status_code=404, detail="User organization not found")
-        
-        org = db.query(Organization).filter(
-            Organization.org_id == user.org_id
-        ).first()
-        
-        if not org:
-            raise HTTPException(status_code=404, detail="Organization not found")
+            raise HTTPException(status_code=404, detail="No user found in organization")
         
         return {
             "org_id": str(org.org_id),
@@ -50,6 +46,10 @@ def get_current_user_org(platform_user_id: str = Header(None, alias="X-Platform-
             "subscription_tier": org.subscription_tier,
             "user_role": user.role,
         }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
     finally:
         db.close()
 
