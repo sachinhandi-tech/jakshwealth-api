@@ -415,14 +415,14 @@ def get_scan_progress(job_id: str) -> dict:
 
 
 @app.get("/api/kite/performance/metrics")
-def get_performance_metrics() -> dict:
+def get_perf_metrics() -> dict:
     """Get historical scan performance metrics (last 10 scans)."""
-    from kite_app.scan_progress import get_performance_metrics
+    from kite_app.scan_progress import get_performance_metrics as fetch_perf_metrics
     from kite_app.models import get_sessionmaker
     
     db = get_sessionmaker()()
     try:
-        metrics = get_performance_metrics(db, limit=10)
+        metrics = fetch_perf_metrics(db, limit=10)
         return {
             "scans": metrics,
             "latest": metrics[0] if metrics else None,
