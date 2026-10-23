@@ -103,7 +103,7 @@ def record_gtt_attempt(
             trigger_value=None if row.get("buy_price") is None else str(row.get("buy_price")),
             last_price=None if row.get("last_price") is None else str(row.get("last_price")),
             transaction_type="BUY" if sent else None,
-            quantity=1 if sent else None,
+            quantity=row.get("quantity") or None,
             price=None if row.get("buy_price") is None else str(row.get("buy_price")),
             order_type="LIMIT" if sent else None,
             product="CNC" if sent else None,

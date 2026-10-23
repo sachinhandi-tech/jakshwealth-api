@@ -250,7 +250,7 @@ def test_confirmed_gtt_is_stored_once_and_a_failure_is_not_retried(databases):
     assert rows[0].transaction_type == "BUY"
     assert rows[0].exchange == "NSE"
     assert rows[0].product == "CNC"
-    assert rows[0].quantity == 1
+    assert rows[0].quantity == 25
     assert client.place_gtt.call_count == 1
 
     clear_recent_placements()

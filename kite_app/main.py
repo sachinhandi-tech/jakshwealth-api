@@ -15,7 +15,8 @@ from starlette.middleware.cors import CORSMiddleware
 from kiteconnect.exceptions import TokenException
 
 from kite_app.auth_router import router as zerodha_auth_router
-from kite_app.gtt_orders import GttRejected, gtt_state, live_gtt
+from kite_app.algo_layers import select_setups
+from kite_app.gtt_orders import GttRejected, arm_exit, gtt_state, live_gtt
 from kite_app.inbox import recent_signals, remember
 from kite_app.kite_service import KiteAuthError, KiteService
 from kite_app.scan_jobs import enqueue_scan, read_scan
@@ -148,6 +149,7 @@ class QuoteRow(BaseModel):
 
 class GttOrderIn(BaseModel):
     symbol: str
+    exchange: str = "NSE"
     quantity: int = 1
     buy_price: Optional[float] = None
     stoploss: Optional[float] = None
@@ -161,6 +163,40 @@ class GttStateRequest(BaseModel):
 class LiveGttRequest(BaseModel):
     confirm_live: Optional[bool] = None
     orders: list[GttOrderIn] = Field(default_factory=list)
+
+
+class ExitOrderIn(BaseModel):
+    symbol: str
+    exchange: str = "NSE"
+    stoploss: float
+    target: float
+    last_price: float
+
+
+class ExitGttRequest(BaseModel):
+    confirm_live: Optional[bool] = None
+    orders: list[ExitOrderIn] = Field(default_factory=list)
+
+
+class SetupCandle(BaseModel):
+    date: str
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+
+
+class SetupStock(BaseModel):
+    symbol: str
+    company_name: str = ""
+    exchange: str = "NSE"
+    instrument_type: str = "EQ"
+    candles: list[SetupCandle] = Field(default_factory=list)
+
+
+class SetupRequest(BaseModel):
+    stocks: list[SetupStock] = Field(default_factory=list)
 
 
 def _auth_error(exc: KiteAuthError) -> HTTPException:
@@ -361,6 +397,41 @@ def algo_gtt_state(body: GttStateRequest) -> dict:
     try:
         kite = service._require_client()
         return {"orders": gtt_state(kite, _gtt_orders(body.orders))}
+    except SignalScanError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except TokenException as exc:
+        service._drop_expired_session(exc)
+        raise HTTPException(status_code=401, detail="Log in with a fresh request token. No saved session was found.") from exc
+    except KiteAuthError as exc:
+        raise _auth_error(exc) from exc
+
+
+@app.post("/api/kite/algo/setups")
+def algo_setups(body: SetupRequest) -> dict:
+    stocks = []
+    for stock in body.stocks:
+        item = stock.model_dump()
+        item["candles"] = [candle.model_dump() for candle in stock.candles]
+        stocks.append(item)
+    return select_setups(stocks)
+
+
+@app.post("/api/algo-orders/arm-exit")
+def algo_arm_exit(body: ExitGttRequest) -> dict:
+    try:
+        record = service.require_session()
+        kite = service._require_client()
+        return {
+            "orders": arm_exit(
+                kite,
+                [order.model_dump() for order in body.orders],
+                body.confirm_live,
+                platform_user_id=record.get("platform_user_id"),
+                zerodha_user_id=record.get("user_id"),
+            )
+        }
+    except GttRejected as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except SignalScanError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except TokenException as exc:

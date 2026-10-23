@@ -56,7 +56,7 @@ def test_state_is_ready_and_rounds_to_the_tick_without_placing():
     assert rows[0]["buy_price"] == 3903.3
     assert rows[0]["stoploss"] == 3708.1
     assert rows[0]["tick_size"] == 0.1
-    assert rows[0]["quantity"] == 1
+    assert rows[0]["quantity"] == 25
     assert rows[0]["buy_status"] == "ready"
     assert rows[0]["account_state"] == "clear"
     assert rows[0]["message"] == "Ready for buy GTT placement."
@@ -88,7 +88,7 @@ def test_live_places_one_buy_gtt_and_a_repeat_is_already_active():
     assert sent["last_price"] == 4043.0
     assert sent["orders"] == [{
         "transaction_type": "BUY",
-        "quantity": 1,
+        "quantity": 25,
         "price": 3903.3,
         "order_type": "LIMIT",
         "product": "CNC",
@@ -150,6 +150,45 @@ def test_confirm_live_false_rejects_before_any_kite_call():
     client.get_gtts.assert_not_called()
     client.place_gtt.assert_not_called()
     assert_no_other_mutations(client)
+
+
+def test_equity_above_one_lakh_is_not_sent():
+    clear_recent_placements()
+    client = kite()
+    row = live_gtt(client, [order(buy_price="150000", last_price="151000")], confirm_live=True)[0]
+    assert row["quantity"] == 0
+    assert row["buy_status"] == "failed"
+    assert row["message"] == "One lakh rupees does not buy one share at this price."
+    client.place_gtt.assert_not_called()
+
+
+def test_future_and_commodity_buy_one_lot():
+    clear_recent_placements()
+    future = kite(instruments=[{
+        "exchange": "NFO",
+        "instrument_type": "FUT",
+        "tradingsymbol": "RELIANCE24NOVFUT",
+        "tick_size": "0.05",
+        "lot_size": 250,
+    }])
+    row = live_gtt(future, [order(symbol="RELIANCE24NOVFUT", exchange="NFO", buy_price="2500", last_price="2510")], confirm_live=True)[0]
+    sent = future.place_gtt.call_args.kwargs
+    assert row["buy_status"] == "success"
+    assert sent["exchange"] == "NFO"
+    assert sent["orders"][0]["quantity"] == 250
+    assert sent["orders"][0]["product"] == "NRML"
+    assert_no_other_mutations(future)
+
+    missing = kite(instruments=[{
+        "exchange": "MCX",
+        "instrument_type": "FUT",
+        "tradingsymbol": "CRUDEOIL24NOVFUT",
+        "tick_size": "1",
+    }])
+    blocked = live_gtt(missing, [order(symbol="CRUDEOIL24NOVFUT", exchange="MCX", buy_price="6000", last_price="6100")], confirm_live=True)[0]
+    assert blocked["buy_status"] == "failed"
+    assert blocked["message"] == "Kite did not return a lot size for this contract."
+    missing.place_gtt.assert_not_called()
 
 
 def test_trigger_at_or_above_ltp_is_not_sent():
