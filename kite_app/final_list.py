@@ -112,8 +112,12 @@ def public_snapshot() -> dict:
         focus = _FOCUS
     lines = _progress_lines()
     progress = _scan_progress()
-    if focus and focus not in lines:
+    if focus and focus not in lines and "% remaining." not in focus:
         lines.append(focus)
+    if progress:
+        count_line = _count_line()
+        lines = [line for line in lines if "% remaining." not in line]
+        lines.append(count_line)
     if not lines:
         lines = [_READ_NOTE]
     activity = []
@@ -203,6 +207,16 @@ def _progress_lines() -> list[str]:
     return lines
 
 
+def _count_line() -> str:
+    progress = _scan_progress()
+    if not progress:
+        return "Fetching the NSE share list from Zerodha."
+    return (
+        f"{progress['done']:,} of {progress['total']:,} {progress['label']} scanned. "
+        f"{progress['remaining_percent']}% remaining."
+    )
+
+
 def _scan_progress() -> Optional[dict]:
     from kite_app.desk_progress import scan_status
 
@@ -243,9 +257,12 @@ def _launch(record: dict) -> None:
         if queued:
             with _LOCK:
                 _RECORD = record
+                already = _WORKING
                 _WORKING = True
-                _FOCUS = "Queued NSE equities and front-month commodity futures. Batches keep running if this page closes."
-            _remember(_FOCUS)
+                if not _FOCUS:
+                    _FOCUS = _READ_NOTE
+            if not already:
+                _remember(_READ_NOTE)
             return
     with _LOCK:
         _RECORD = record
@@ -301,7 +318,7 @@ def _handle_pass(body: dict) -> None:
         return
     if equity_work_pending():
         enqueue_equity_pass(user, delay_seconds=20, wave=wave)
-        _set_working(True, "Waiting for the next price batch.")
+        _set_working(True, _count_line())
         return
     _set_working(False, "The equity read is finished.")
 

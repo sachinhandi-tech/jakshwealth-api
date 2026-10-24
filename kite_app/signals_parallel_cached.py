@@ -226,8 +226,11 @@ def scan_nifty100_parallel_cached(
 
         constituents = constituents[:max_stocks]
         universe_count = len(constituents)
+        from kite_app.desk_progress import note_scan
+
+        note_scan(progress_key, 0, universe_count, 0, True)
         if scan_all_nse:
-            note_activity(f"{book_label}: {universe_count} names. Reading daily prices.")
+            note_activity(f"{book_label}: 0 of {universe_count} names. 100% remaining.")
         skipped = 0
         queued = []
         for constituent in constituents:
@@ -262,9 +265,6 @@ def scan_nifty100_parallel_cached(
 
         signals = []
         scanned = 0
-        from kite_app.desk_progress import note_scan
-
-        note_scan(progress_key, 0, universe_count, 0, True)
         from kite_app.desk_progress import scan_paused
 
         executor = ThreadPoolExecutor(max_workers=MAX_WORKERS)

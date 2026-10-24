@@ -7,7 +7,7 @@ import logging
 import os
 import threading
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from kiteconnect import KiteConnect
@@ -60,7 +60,10 @@ def ensure_listed_equity_scan(record: Optional[dict]) -> str:
     try:
         for book, cap in _BOOKS:
             if _book_running(book):
-                return _EQUITY_NOTE
+                if _scan_is_live(book):
+                    return _EQUITY_NOTE
+                if not _release_stale_run(book):
+                    return _EQUITY_NOTE
             if _book_covered(book):
                 continue
             params = _book_params(book, "price", 200, 200, 120, cap)
@@ -137,6 +140,46 @@ def _book_covered(book: str) -> bool:
         if universe <= 0 or covered < universe:
             return False
     return True
+
+
+def _scan_is_live(book: str) -> bool:
+    from kite_app.desk_progress import scan_status
+
+    for mode, row in scan_status().items():
+        name = mode.split(":", 1)[0] if ":" in mode else mode
+        if name == book and row.get("running") and int(row.get("total") or 0) > 0:
+            return True
+    return False
+
+
+def _release_stale_run(book: str) -> bool:
+    """A database row can stay 'running' after the thread is gone. Release it so a new read can start."""
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=120)
+    if not _use_database():
+        stale = [
+            job_id for job_id, row in _MEMORY.items()
+            if row.get("status") == "running" and _request_book(row.get("request_json")) == book
+        ]
+        for job_id in stale:
+            _finish(job_id, "error", None, "The scan stopped before it could report progress.")
+        return bool(stale)
+    db = get_sessionmaker()()
+    try:
+        jobs = db.query(SignalScanJob).filter(SignalScanJob.status == "running").all()
+    finally:
+        db.close()
+    released = False
+    for job in jobs:
+        if _request_book(job.request_json) != book:
+            continue
+        created = job.created_at
+        if created is not None and created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        if created is not None and created > cutoff:
+            return False
+        _finish(job.job_id, "error", None, "The scan stopped before it could report progress.")
+        released = True
+    return released
 
 
 def _book_running(book: str) -> bool:
