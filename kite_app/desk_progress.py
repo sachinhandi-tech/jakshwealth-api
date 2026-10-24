@@ -9,6 +9,7 @@ _SCANS: dict[str, dict] = {}
 _FILL = {"saved": 0, "universe": 0, "active": False}
 _PAUSED = False
 _ACTIVITY: list[str] = []
+_GENERATION = 0
 
 
 def scan_paused() -> bool:
@@ -30,6 +31,25 @@ def resume_scan() -> None:
     global _PAUSED
     with _LOCK:
         _PAUSED = False
+
+
+def current_generation() -> int:
+    with _LOCK:
+        return _GENERATION
+
+
+def bump_generation() -> int:
+    """Ignore a scan that was already running when the desk starts again from zero."""
+    global _GENERATION
+    with _LOCK:
+        _GENERATION += 1
+        return _GENERATION
+
+
+def clear_activity() -> None:
+    with _LOCK:
+        _ACTIVITY.clear()
+        _SCANS.clear()
 
 
 def note_activity(text: str) -> None:

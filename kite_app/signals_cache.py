@@ -12,7 +12,7 @@ import uuid
 from datetime import datetime, date, timedelta
 from typing import Optional
 
-from sqlalchemy import JSON, DateTime, String, Text, Uuid
+from sqlalchemy import DateTime, String, Text, Uuid, func
 from kiteconnect.exceptions import TokenException
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, Session
 import json
@@ -250,6 +250,139 @@ def should_update_cache(cache: StockHistoryCache, days_old: int = 7) -> bool:
     return age.days > days_old
 
 
+def _as_day(value) -> Optional[date]:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    text = str(value or "")[:10]
+    try:
+        return date.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def _span(candles: list[dict]) -> tuple[Optional[date], Optional[date]]:
+    days = [day for day in (_as_day(candle.get("date")) for candle in candles) if day is not None]
+    if not days:
+        return None, None
+    return min(days), max(days)
+
+
+def candles_cover(candles: list[dict], start_date: date, needed: date) -> bool:
+    """True when the saved bars already include the window the screen needs."""
+    first, last = _span(candles)
+    return first is not None and last is not None and first <= start_date and last >= needed
+
+
+def published_day(kite, token: int) -> Optional[date]:
+    """One historical call. Its last bar is the newest day Zerodha is publishing."""
+    end = date.today()
+    start = end - timedelta(days=10)
+    try:
+        _wait_for_kite()
+        candles = kite.historical_data(
+            instrument_token=token,
+            from_date=start,
+            to_date=end,
+            interval="day",
+        )
+    except TokenException:
+        raise
+    except Exception:
+        return None
+    days = [day for day in (_as_day((candle or {}).get("date")) for candle in candles or []) if day is not None]
+    return max(days) if days else None
+
+
+def bulk_histories(db: Session, tokens: list[int]) -> dict[int, list[dict]]:
+    """Load saved daily bars for many tokens in a few queries."""
+    wanted = []
+    seen = set()
+    for token in tokens:
+        try:
+            number = int(token)
+        except (TypeError, ValueError):
+            continue
+        if number not in seen:
+            seen.add(number)
+            wanted.append(number)
+    found: dict[int, list[dict]] = {}
+    if not wanted:
+        return found
+    for offset in range(0, len(wanted), 500):
+        rows = db.query(StockHistoryCache).filter(
+            StockHistoryCache.token.in_(wanted[offset:offset + 500])
+        ).all()
+        for row in rows:
+            try:
+                candles = json.loads(row.candles_json)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(candles, list) or not candles:
+                continue
+            current = found.get(int(row.token))
+            if current is None or len(candles) > len(current):
+                found[int(row.token)] = candles
+    return found
+
+
+def _saved_candles(db: Session, token: int, ticker: str, start_date: date, end_date: date) -> Optional[list[dict]]:
+    complete = get_cached_candles(db, token, ticker, start_date, end_date)
+    if complete:
+        return complete
+    try:
+        with _CACHE_LOCK:
+            row = db.query(StockHistoryCache).filter(StockHistoryCache.token == token).first()
+    except Exception:
+        return None
+    if row is None or not row.candles_json:
+        return None
+    try:
+        candles = json.loads(row.candles_json)
+    except json.JSONDecodeError:
+        return None
+    return candles if isinstance(candles, list) and candles else None
+
+
+def _merge_candles(existing: list[dict], extra: list[dict]) -> list[dict]:
+    by_day = {}
+    for candle in list(existing) + list(extra):
+        day = _as_day(candle.get("date"))
+        if day is not None:
+            by_day[day] = candle
+    return [by_day[day] for day in sorted(by_day)]
+
+
+def _extend_candles(kite, db: Session, token: int, ticker: str, cached: list[dict], end_date: date) -> Optional[list[dict]]:
+    """Fetch only the missing days. An empty reply means Zerodha has nothing newer."""
+    _first, last = _span(cached)
+    if last is None:
+        return None
+    if last >= end_date:
+        return cached
+    try:
+        _wait_for_kite()
+        extra = kite.historical_data(
+            instrument_token=token,
+            from_date=last + timedelta(days=1),
+            to_date=end_date,
+            interval="day",
+        )
+    except TokenException:
+        raise
+    except Exception:
+        return cached
+    if not extra:
+        return cached
+    merged = _merge_candles(cached, extra)
+    try:
+        cache_candles(db, token, ticker, _span(merged)[0] or end_date, end_date, merged)
+    except Exception:
+        db.rollback()
+    return merged
+
+
 def get_candles_with_cache(
     kite,
     db: Session,
@@ -257,12 +390,17 @@ def get_candles_with_cache(
     ticker: str,
     start_date: date,
     end_date: date,
+    fresh_through: Optional[date] = None,
+    known: Optional[list[dict]] = None,
 ) -> Optional[list[dict]]:
-    """Get candles from cache or fetch from Kite API, then cache result."""
-    # Check cache first
-    cached = get_cached_candles(db, token, ticker, start_date, end_date)
-    if cached:
+    """Use saved bars when they already reach the newest published day."""
+    needed = fresh_through if fresh_through is not None and fresh_through <= end_date else end_date
+    cached = known if known else _saved_candles(db, token, ticker, start_date, end_date)
+    if cached and candles_cover(cached, start_date, needed):
         return cached
+    first, _last = _span(cached or [])
+    if cached and first is not None and first <= start_date:
+        return _extend_candles(kite, db, token, ticker, cached, end_date)
 
     try:
         _wait_for_kite()
@@ -296,11 +434,9 @@ class CacheStats:
         return self.db.query(StockHistoryCache).count()
     
     def total_candles_cached(self) -> int:
-        """Sum of all candles across cache entries."""
-        return sum(
-            c.candle_count 
-            for c in self.db.query(StockHistoryCache).all()
-        )
+        """Sum of cached bar counts. The candle text itself stays in the table."""
+        total = self.db.query(func.coalesce(func.sum(StockHistoryCache.candle_count), 0)).scalar()
+        return int(total or 0)
     
     def estimated_api_calls_saved(self) -> int:
         """Rough estimate of Kite API calls avoided by caching."""

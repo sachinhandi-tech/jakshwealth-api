@@ -54,7 +54,12 @@ def test_stop_holds_the_scan_until_continue(monkeypatch):
     from kite_app.desk_progress import resume_scan
 
     started = []
+    forgotten = []
     monkeypatch.setattr(final_list, "_launch", lambda record: started.append(record["api_key"]))
+    monkeypatch.setattr(
+        "kite_app.scan_jobs.forget_saved_scans",
+        lambda: forgotten.append(True),
+    )
     resume_scan()
     try:
         stopped = final_list.stop_scan()
@@ -73,5 +78,7 @@ def test_stop_holds_the_scan_until_continue(monkeypatch):
         resumed = final_list.continue_scan({"api_key": "key", "access_token": "secret-token"})
         assert resumed["paused"] is False
         assert started == ["key"]
+        assert forgotten == [True]
+        assert "secret-token" not in str(resumed)
     finally:
         resume_scan()

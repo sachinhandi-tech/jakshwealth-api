@@ -321,12 +321,20 @@ def run_scan_job(job_id: str) -> None:
         kite = KiteConnect(api_key=secret["api_key"])
         kite.set_access_token(secret["access_token"])
         params = json.loads(row["request_json"])
+        from kite_app.desk_progress import current_generation
+
+        generation = current_generation()
         
         # Use cached parallel scanner
         scan_all_nse = params.get("scan_all_nse", False)
-        budget = 720 if params.get("full_pass") else 1200 if scan_all_nse else 180
+        budget = 1200 if params.get("full_pass") or scan_all_nse else 180
         
         result = scan_nifty100_parallel_cached(kite, budget_seconds=budget, **params)
+        from kite_app.desk_progress import current_generation
+
+        if current_generation() != generation:
+            _finish(job_id, "done", None, None)
+            return
         result["scan_all_nse"] = bool(scan_all_nse)
         result["full_pass"] = bool(params.get("full_pass"))
         _finish(job_id, "done", json.dumps(result), None)
@@ -401,6 +409,35 @@ def _save_new(job_id: str, params: dict, blob: str) -> None:
             )
         )
         db.commit()
+    finally:
+        db.close()
+
+
+def forget_saved_scans() -> None:
+    """Drop saved scan coverage so the next read starts at the first name."""
+    keys = (
+        "short",
+        "long",
+        "commodity_future-short",
+        "commodity_future-long",
+        "stock_future-short",
+        "stock_future-long",
+        "stock_option-short",
+        "stock_option-long",
+    )
+    for key in keys:
+        _LISTS.pop(key, None)
+    if not _use_database():
+        return
+    from kite_app.models import SavedCrossoverList
+
+    db = get_sessionmaker()()
+    try:
+        db.query(SavedCrossoverList).filter(SavedCrossoverList.horizon.in_(keys)).delete(synchronize_session=False)
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.info("saved scan coverage was not cleared")
     finally:
         db.close()
 

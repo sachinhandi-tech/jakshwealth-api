@@ -36,3 +36,58 @@ def test_candle_read_uses_redis_before_postgres(monkeypatch):
     candles = get_cached_candles(Boom(), 1, "INFY", date(2026, 2, 1), date(2026, 5, 1))
 
     assert candles[0]["close"] == 10
+
+
+def test_saved_bars_skip_zerodha_when_they_match_the_published_day(monkeypatch):
+    from kite_app.signals_cache import get_candles_with_cache
+
+    monkeypatch.setattr("kite_app.signals_cache._wait_for_kite", lambda: (_ for _ in ()).throw(AssertionError("kite")))
+    saved = [
+        {"date": "2026-01-01", "close": 10},
+        {"date": "2026-10-23", "close": 12},
+    ]
+
+    found = get_candles_with_cache(
+        object(),
+        object(),
+        1,
+        "INFY",
+        date(2026, 1, 1),
+        date(2026, 10, 24),
+        fresh_through=date(2026, 10, 23),
+        known=saved,
+    )
+
+    assert found[-1]["close"] == 12
+
+
+def test_only_the_missing_days_are_fetched(monkeypatch):
+    from kite_app.signals_cache import get_candles_with_cache
+
+    calls = []
+
+    class Kite:
+        def historical_data(self, instrument_token, from_date, to_date, interval):
+            calls.append(from_date)
+            return [{"date": "2026-10-23", "close": 13, "volume": 10}]
+
+    monkeypatch.setattr("kite_app.signals_cache._wait_for_kite", lambda: None)
+    monkeypatch.setattr("kite_app.signals_cache.cache_candles", lambda *args, **kwargs: None)
+    saved = [
+        {"date": "2026-01-01", "close": 10},
+        {"date": "2026-10-22", "close": 12},
+    ]
+
+    found = get_candles_with_cache(
+        Kite(),
+        object(),
+        1,
+        "INFY",
+        date(2026, 1, 1),
+        date(2026, 10, 24),
+        fresh_through=date(2026, 10, 23),
+        known=saved,
+    )
+
+    assert calls == [date(2026, 10, 23)]
+    assert [row["close"] for row in found] == [10, 12, 13]

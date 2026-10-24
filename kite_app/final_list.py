@@ -28,7 +28,7 @@ _SLICE = 250
 
 _LOGIN_NOTE = "Log in to Zerodha to read NSE equities and commodity futures."
 _READ_NOTE = "Reading NSE equities and front-month commodity futures."
-_STOP_NOTE = "Scan stopped. Saved names stay on the lists."
+_STOP_NOTE = "Scan stopped. Start from zero when you want a new read from the first name."
 
 
 def begin_final_list(record: Optional[dict], launch: bool = True) -> dict:
@@ -49,7 +49,7 @@ def begin_final_list(record: Optional[dict], launch: bool = True) -> dict:
 
 
 def stop_scan() -> dict:
-    """Pause the read. Opening the page again does not start it."""
+    """Stop the read. The next pass starts only when you ask to start from zero."""
     from kite_app.desk_progress import pause_scan
 
     pause_scan()
@@ -57,16 +57,33 @@ def stop_scan() -> dict:
     return public_snapshot()
 
 
-def continue_scan(record: Optional[dict]) -> dict:
-    """Resume the read from the names already saved."""
-    from kite_app.desk_progress import resume_scan
+def start_from_zero(record: Optional[dict]) -> dict:
+    """Drop this read's progress and start again at the first NSE share."""
+    global _LAST_COUNT, _RUNNING, _SEEN
+    from kite_app.desk_progress import bump_generation, clear_activity, resume_scan
+    from kite_app.scan_jobs import forget_saved_scans
 
     if not record or not record.get("api_key") or not record.get("access_token"):
         _set_working(False, _LOGIN_NOTE)
         return public_snapshot()
+    bump_generation()
+    forget_saved_scans()
+    clear_activity()
+    with _LOCK:
+        _SEEN = set()
+        _LAST_COUNT = -1
+        _BOOK["scanned"] = 0
+        _BOOK["accepted"] = 0
+        _RUNNING = False
     resume_scan()
+    _set_working(True, "Starting again from the first NSE share.")
     _launch(record)
     return public_snapshot()
+
+
+def continue_scan(record: Optional[dict]) -> dict:
+    """Older clients use this path. It starts again from the first name."""
+    return start_from_zero(record)
 
 
 def public_snapshot() -> dict:
@@ -81,6 +98,7 @@ def public_snapshot() -> dict:
         }
         focus = _FOCUS
     lines = _progress_lines()
+    progress = _scan_progress()
     if focus and focus not in lines:
         lines.append(focus)
     if not lines:
@@ -90,6 +108,7 @@ def public_snapshot() -> dict:
         active = book["working"] and index == len(lines[-5:]) - 1
         activity.append({"text": text, "state": "active" if active else "done"})
     book["activity"] = activity
+    book["progress"] = progress
     book["universe_note"] = activity[-1]["text"] if book["working"] else ""
     return book
 
@@ -167,6 +186,25 @@ def _progress_lines() -> list[str]:
             label = books.get(book, "Names")
             lines.append(f"{label}: {int(row.get('done') or 0)} of {total} names.")
     return lines
+
+
+def _scan_progress() -> Optional[dict]:
+    from kite_app.desk_progress import scan_status
+
+    books = {
+        "equity": "NSE equities",
+        "commodity_future": "Commodity futures",
+    }
+    for mode, row in scan_status().items():
+        total = int(row.get("total") or 0)
+        if row.get("running") and total:
+            book = mode.split(":", 1)[0] if ":" in mode else "equity"
+            return {
+                "done": int(row.get("done") or 0),
+                "total": total,
+                "label": books.get(book, "Names"),
+            }
+    return None
 
 
 def _launch(record: dict) -> None:
@@ -381,11 +419,16 @@ async def serve_queue(stop) -> None:
 
 def _loop() -> None:
     global _RUNNING
+    from kite_app.desk_progress import current_generation
+
     started = time.monotonic()
+    generation = current_generation()
     try:
         while time.monotonic() - started < 45 * 60:
             if _paused():
                 _set_working(False, _STOP_NOTE)
+                return
+            if current_generation() != generation:
                 return
             record = _current_record()
             try:

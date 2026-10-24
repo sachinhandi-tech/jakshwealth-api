@@ -20,7 +20,7 @@ from kite_app.signals import (
     load_nifty100,
     nse_equity_tokens,
 )
-from kite_app.signals_cache import get_candles_with_cache
+from kite_app.signals_cache import bulk_histories, candles_cover, get_candles_with_cache, published_day
 
 logger = logging.getLogger("kite_app.scan")
 
@@ -62,22 +62,35 @@ def _scan_stock_cached(
     scan_mode: str,
     exchange: str = "NSE",
     full_pass: bool = False,
+    fresh_through: Optional[date] = None,
+    known: Optional[list[dict]] = None,
 ) -> tuple[Optional[object], str]:
     """Return a real crossover, or a status of none or skipped."""
-    db_session = get_sessionmaker()()
+    end_date = date.today()
+    start_date = end_date - timedelta(
+        days=history_span_days(lookback_days, long_window, trend_window)
+    )
+    needed = fresh_through if fresh_through is not None else end_date
+    db_session = None
     try:
-        end_date = date.today()
-        start_date = end_date - timedelta(
-            days=history_span_days(lookback_days, long_window, trend_window)
-        )
-        candles = get_candles_with_cache(
-            kite,
-            db_session,
-            token,
-            ticker,
-            start_date,
-            end_date,
-        )
+        if known and candles_cover(known, start_date, needed):
+            candles = known
+        else:
+            db_session = get_sessionmaker()()
+            kwargs = {}
+            if fresh_through is not None or known:
+                kwargs = {"fresh_through": fresh_through, "known": known}
+            candles = get_candles_with_cache(
+                kite,
+                db_session,
+                token,
+                ticker,
+                start_date,
+                end_date,
+                **kwargs,
+            )
+            db_session.close()
+            db_session = None
         needed = long_window + 1
         if not candles or len(candles) < needed:
             return None, "skipped"
@@ -138,7 +151,20 @@ def _scan_stock_cached(
         logger.info("stock scan skipped %s %s", ticker, exc.__class__.__name__)
         return None, "skipped"
     finally:
-        db_session.close()
+        if db_session is not None:
+            db_session.close()
+
+
+def _published_day(kite, queued: list[dict]):
+    """Ask Zerodha once for the newest daily bar. A few tokens are tried if the first is empty."""
+    for row in queued[:3]:
+        try:
+            day = published_day(kite, int(row["token"]))
+        except (TypeError, ValueError):
+            continue
+        if day is not None:
+            return day
+    return None
 
 
 def scan_nifty100_parallel_cached(
@@ -167,9 +193,10 @@ def scan_nifty100_parallel_cached(
 
     db = get_sessionmaker()()
     try:
-        from kite_app.desk_progress import note_activity
+        from kite_app.desk_progress import note_activity, scan_paused, current_generation
 
         book_label = "Commodity futures" if book == "commodity_future" else "NSE equities"
+        generation = current_generation()
         if scan_all_nse:
             note_activity(f"Asking Zerodha for the {book_label} list.")
             from kite_app.scanner_data import trade_universe
@@ -213,6 +240,26 @@ def scan_nifty100_parallel_cached(
         if not queued:
             raise SignalScanError("No valid tokens found")
 
+        fresh_through = None
+        preloaded: dict[int, list[dict]] = {}
+        if scan_all_nse:
+            fresh_through = _published_day(kite, queued)
+            try:
+                preloaded = bulk_histories(db, [int(row["token"]) for row in queued])
+            except Exception:
+                preloaded = {}
+            if fresh_through is not None and preloaded:
+                window_start = date.today() - timedelta(
+                    days=history_span_days(lookback_days, long_window, trend_window)
+                )
+                ready = sum(
+                    1
+                    for row in queued
+                    if candles_cover(preloaded.get(int(row["token"])) or [], window_start, fresh_through)
+                )
+                if ready:
+                    note_activity(f"Saved prices already cover {ready} of {len(queued)} names.")
+
         signals = []
         scanned = 0
         from kite_app.desk_progress import note_scan
@@ -224,7 +271,7 @@ def scan_nifty100_parallel_cached(
         futures = {}
         try:
             for constituent in queued:
-                if time.monotonic() > deadline or scan_paused():
+                if time.monotonic() > deadline or scan_paused() or current_generation() != generation:
                     break
                 future = executor.submit(
                     _scan_stock_cached,
@@ -241,11 +288,13 @@ def scan_nifty100_parallel_cached(
                     scan_mode,
                     str(constituent.get("exchange") or "NSE"),
                     full_pass,
+                    fresh_through,
+                    preloaded.get(int(constituent["token"])),
                 )
                 futures[future] = constituent["ticker"]
 
             for future in as_completed(list(futures)):
-                if time.monotonic() > deadline or scan_paused():
+                if time.monotonic() > deadline or scan_paused() or current_generation() != generation:
                     break
                 found, status = future.result()
                 scanned += 1

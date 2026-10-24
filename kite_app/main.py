@@ -471,6 +471,18 @@ def algo_scan_continue() -> dict:
     return continue_scan(record)
 
 
+@app.post("/api/kite/algo/scan/restart")
+def algo_scan_restart() -> dict:
+    """Clear this read and start again at the first NSE share."""
+    from kite_app.final_list import start_from_zero
+
+    try:
+        record = service.saved_session()
+    except Exception:
+        record = None
+    return start_from_zero(record)
+
+
 @app.post("/api/algo-orders/arm-exit")
 def algo_arm_exit(body: ExitGttRequest) -> dict:
     try:
