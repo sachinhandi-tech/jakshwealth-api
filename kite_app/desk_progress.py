@@ -69,16 +69,29 @@ def activity_status() -> list[str]:
         return list(_ACTIVITY)
 
 
-def note_scan(mode: str, done: int, total: int, signals: int, running: bool) -> None:
+def note_scan(
+    mode: str,
+    done: int,
+    total: int,
+    signals: int,
+    running: bool,
+    label: str = "",
+    action: str = "",
+) -> None:
     with _LOCK:
         if _PAUSED:
             running = False
-        _SCANS[str(mode)] = {
+        row = {
             "done": int(done),
             "total": int(total),
             "signals": int(signals),
             "running": bool(running),
         }
+        if label:
+            row["label"] = label
+        if action:
+            row["action"] = action
+        _SCANS[str(mode)] = row
 
 
 def scan_status() -> dict:

@@ -20,6 +20,7 @@ _LAST_SCREEN = 0.0
 _LAST_COUNT = -1
 _RECORD: Optional[dict] = None
 _SEEN: set[str] = set()
+_SCREENED: set[str] = set()
 _REVIEW_QUEUED: set[str] = set()
 _STAMP = ("ai_decision", "ai_checks", "ai_reason", "gtt_tradable", "reason")
 _PASS_LIMIT = 80
@@ -59,7 +60,7 @@ def stop_scan() -> dict:
 
 def start_from_zero(record: Optional[dict]) -> dict:
     """Drop this read's progress and start again at the first NSE share."""
-    global _LAST_COUNT, _RUNNING, _SEEN
+    global _LAST_COUNT, _RUNNING, _SEEN, _SCREENED
     from kite_app.desk_progress import bump_generation, clear_activity, resume_scan
 
     if not record or not record.get("api_key") or not record.get("access_token"):
@@ -69,6 +70,7 @@ def start_from_zero(record: Optional[dict]) -> dict:
     clear_activity()
     with _LOCK:
         _SEEN = set()
+        _SCREENED = set()
         _LAST_COUNT = -1
         _BOOK["scanned"] = 0
         _BOOK["accepted"] = 0
@@ -197,6 +199,8 @@ def _progress_lines() -> list[str]:
         "commodity_future": "Commodity futures",
     }
     for mode, row in scan_status().items():
+        if mode == "screen":
+            continue
         total = int(row.get("total") or 0)
         if row.get("running") and total:
             book = mode.split(":", 1)[0] if ":" in mode else "equity"
@@ -211,8 +215,9 @@ def _count_line() -> str:
     progress = _scan_progress()
     if not progress:
         return "Fetching the NSE share list from Zerodha."
+    action = progress.get("action") or "scanned"
     return (
-        f"{progress['done']:,} of {progress['total']:,} {progress['label']} scanned. "
+        f"{progress['done']:,} of {progress['total']:,} {progress['label']} {action}. "
         f"{progress['remaining_percent']}% remaining."
     )
 
@@ -235,7 +240,8 @@ def _scan_progress() -> Optional[dict]:
         payload = {
             "done": done,
             "total": total,
-            "label": books.get(book, "Names"),
+            "label": str(row.get("label") or "") or books.get(book, "Names"),
+            "action": str(row.get("action") or "scanned"),
             "remaining_percent": round(remaining * 100 / total),
         }
         if row.get("running"):
@@ -305,7 +311,8 @@ def _handle_pass(body: dict) -> None:
     from kite_app.scan_jobs import ensure_listed_equity_scan, equity_work_pending
 
     ensure_listed_equity_scan(record)
-    symbols = _next_symbols()
+    saved = _saved_symbols()
+    symbols = _next_symbols(saved)
     from kite_app.equity_queue import enqueue_equity_pass, enqueue_screen_batches
 
     if symbols:
@@ -314,7 +321,8 @@ def _handle_pass(body: dict) -> None:
             raise RuntimeError("screen batches were not queued")
         _mark_seen(symbols)
         enqueue_equity_pass(user, delay_seconds=15, wave=wave)
-        _set_working(True, f"Queued {sent} names for batch screening.")
+        _note_screen_progress(len(_SCREENED), len(saved))
+        _set_working(True, _count_line())
         return
     if equity_work_pending():
         enqueue_equity_pass(user, delay_seconds=20, wave=wave)
@@ -329,7 +337,6 @@ def _handle_screen(body: dict) -> None:
         return
     wanted = set(symbols)
     stocks = [row for row in _load_stocks() if str(row.get("symbol") or "").upper() in wanted]
-    _set_focus(f"Screening a batch of {len(symbols)} names.")
     from kite_app.algo_layers import select_setups
 
     book = select_setups(stocks, review=False)
@@ -345,9 +352,12 @@ def _handle_screen(body: dict) -> None:
         if enqueue_reviews(user, review_symbols) < 1:
             raise RuntimeError("review batches were not queued")
         _REVIEW_QUEUED.update(review_symbols)
+    done = _mark_screened(symbols)
     with _LOCK:
         _BOOK["scanned"] = int(_BOOK["scanned"]) + len(symbols)
         _BOOK["accepted"] = int(_BOOK["accepted"]) + int(book["accepted"])
+    _note_screen_progress(done)
+    _set_working(True, _count_line())
     if review_symbols:
         _set_focus(f"Queued {', '.join(review_symbols[:5])} for filings, news, and lawsuits.")
 
@@ -371,16 +381,47 @@ def _handle_review(body: dict) -> None:
     _remember(rows)
 
 
-def _next_symbols() -> list[str]:
+def _saved_symbols() -> list[str]:
     found = []
+    seen: set[str] = set()
     for row in _load_stocks():
         symbol = str(row.get("symbol") or "").upper()
-        if not symbol or symbol in _SEEN:
+        if not symbol or symbol in seen:
             continue
+        seen.add(symbol)
         found.append(symbol)
-        if len(found) >= _SLICE:
-            break
     return found
+
+
+def _next_symbols(saved: Optional[list[str]] = None) -> list[str]:
+    rows = _saved_symbols() if saved is None else saved
+    return [symbol for symbol in rows if symbol not in _SEEN][:_SLICE]
+
+
+def _mark_screened(symbols: list[str]) -> int:
+    global _SCREENED
+    with _LOCK:
+        _SCREENED.update(str(symbol).upper() for symbol in symbols if symbol)
+        return len(_SCREENED)
+
+
+def _note_screen_progress(done: int, total: Optional[int] = None) -> None:
+    from kite_app.desk_progress import note_scan, scan_status
+
+    if total is None:
+        total = int((scan_status().get("screen") or {}).get("total") or 0)
+    total = max(int(total), int(done))
+    if total <= 0:
+        return
+    note_scan(
+        "screen",
+        done,
+        total,
+        0,
+        done < total,
+        label="names",
+        action="screened",
+    )
 
 
 def _mark_seen(symbols: list[str]) -> None:

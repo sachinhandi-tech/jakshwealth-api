@@ -52,6 +52,62 @@ def test_saved_names_reach_the_model_away_from_the_request(monkeypatch):
     assert any("INFY" in line["text"] for line in snapshot["activity"])
 
 
+def test_screening_shows_how_many_names_remain(monkeypatch):
+    from kite_app.desk_progress import clear_activity
+
+    clear_activity()
+    monkeypatch.setattr(final_list, "_SEEN", set())
+    monkeypatch.setattr(final_list, "_SCREENED", set())
+    monkeypatch.setattr(final_list, "_REVIEW_QUEUED", set())
+    monkeypatch.setattr(final_list, "_REVIEWS", {})
+    monkeypatch.setattr(
+        final_list,
+        "_load_stocks",
+        lambda: [{"symbol": "AAA"}, {"symbol": "BBB"}, {"symbol": "CCC"}],
+    )
+    monkeypatch.setattr(
+        final_list,
+        "_session_for",
+        lambda user: {"platform_user_id": user, "api_key": "k", "access_token": "t"},
+    )
+    monkeypatch.setattr("kite_app.scan_jobs.ensure_listed_equity_scan", lambda record: None)
+    monkeypatch.setattr("kite_app.scan_jobs.equity_work_pending", lambda: False)
+    monkeypatch.setattr("kite_app.equity_queue.enqueue_screen_batches", lambda user, symbols: len(symbols))
+    monkeypatch.setattr("kite_app.equity_queue.enqueue_equity_pass", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        "kite_app.algo_layers.select_setups",
+        lambda stocks, review=False: {
+            "scanned": len(stocks),
+            "accepted": 0,
+            "setups": [],
+            "sell_calls": [],
+        },
+    )
+    try:
+        final_list._handle_pass({
+            "platform_user_id": "00000000-0000-0000-0000-000000000001",
+            "wave": 0,
+        })
+        queued = final_list.public_snapshot()
+        assert queued["progress"]["done"] == 0
+        assert queued["progress"]["total"] == 3
+        assert queued["progress"]["action"] == "screened"
+        assert queued["progress"]["remaining_percent"] == 100
+        assert "0 of 3 names screened" in queued["activity"][-1]["text"]
+        assert "Queued" not in queued["activity"][-1]["text"]
+
+        final_list._handle_screen({"symbols": ["AAA"], "platform_user_id": "user"})
+        screened = final_list.public_snapshot()
+        assert screened["progress"]["done"] == 1
+        assert screened["progress"]["total"] == 3
+        assert screened["progress"]["remaining_percent"] == 67
+        assert "1 of 3 names screened" in screened["activity"][-1]["text"]
+        assert "67% remaining" in screened["activity"][-1]["text"]
+        assert all("Screening a batch" not in line["text"] for line in screened["activity"])
+    finally:
+        clear_activity()
+
+
 def test_stop_holds_the_scan_until_continue(monkeypatch):
     from kite_app.desk_progress import resume_scan
 
