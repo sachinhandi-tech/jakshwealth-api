@@ -61,13 +61,11 @@ def start_from_zero(record: Optional[dict]) -> dict:
     """Drop this read's progress and start again at the first NSE share."""
     global _LAST_COUNT, _RUNNING, _SEEN
     from kite_app.desk_progress import bump_generation, clear_activity, resume_scan
-    from kite_app.scan_jobs import forget_saved_scans
 
     if not record or not record.get("api_key") or not record.get("access_token"):
         _set_working(False, _LOGIN_NOTE)
         return public_snapshot()
     bump_generation()
-    forget_saved_scans()
     clear_activity()
     with _LOCK:
         _SEEN = set()
@@ -77,8 +75,23 @@ def start_from_zero(record: Optional[dict]) -> dict:
         _RUNNING = False
     resume_scan()
     _set_working(True, "Starting again from the first NSE share.")
-    _launch(record)
-    return public_snapshot()
+    snapshot = public_snapshot()
+    threading.Thread(target=_begin_again, args=(record,), daemon=True).start()
+    return snapshot
+
+
+def _begin_again(record: dict) -> None:
+    """Clear saved coverage, then start the read. Kept off the web request so the gateway does not time out."""
+    try:
+        from kite_app.scan_jobs import forget_saved_scans
+
+        forget_saved_scans()
+    except Exception:
+        logger.info("saved scan coverage was not cleared")
+    try:
+        _launch(record)
+    except Exception:
+        logger.info("scan was not started")
 
 
 def continue_scan(record: Optional[dict]) -> dict:
@@ -184,7 +197,9 @@ def _progress_lines() -> list[str]:
         if row.get("running") and total:
             book = mode.split(":", 1)[0] if ":" in mode else "equity"
             label = books.get(book, "Names")
-            lines.append(f"{label}: {int(row.get('done') or 0)} of {total} names.")
+            done = int(row.get("done") or 0)
+            remaining = 0 if total <= 0 else round(max(total - done, 0) * 100 / total)
+            lines.append(f"{label}: {done} of {total} names. {remaining}% remaining.")
     return lines
 
 
@@ -195,25 +210,37 @@ def _scan_progress() -> Optional[dict]:
         "equity": "NSE equities",
         "commodity_future": "Commodity futures",
     }
+    chosen = None
     for mode, row in scan_status().items():
         total = int(row.get("total") or 0)
-        if row.get("running") and total:
-            book = mode.split(":", 1)[0] if ":" in mode else "equity"
-            return {
-                "done": int(row.get("done") or 0),
-                "total": total,
-                "label": books.get(book, "Names"),
-            }
-    return None
+        if total <= 0:
+            continue
+        book = mode.split(":", 1)[0] if ":" in mode else "equity"
+        done = int(row.get("done") or 0)
+        remaining = max(total - done, 0)
+        payload = {
+            "done": done,
+            "total": total,
+            "label": books.get(book, "Names"),
+            "remaining_percent": round(remaining * 100 / total),
+        }
+        if row.get("running"):
+            return payload
+        chosen = payload
+    return chosen
 
 
 def _launch(record: dict) -> None:
     global _RUNNING, _RECORD, _WORKING, _FOCUS
     user = str(record.get("platform_user_id") or "")
     if user:
-        from kite_app.equity_queue import enqueue_equity_pass
+        try:
+            from kite_app.equity_queue import enqueue_equity_pass
 
-        if enqueue_equity_pass(user):
+            queued = enqueue_equity_pass(user)
+        except Exception:
+            queued = False
+        if queued:
             with _LOCK:
                 _RECORD = record
                 _WORKING = True

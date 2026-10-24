@@ -480,7 +480,13 @@ def algo_scan_restart() -> dict:
         record = service.saved_session()
     except Exception:
         record = None
-    return start_from_zero(record)
+    try:
+        return start_from_zero(record)
+    except Exception:
+        from kite_app.final_list import public_snapshot
+
+        logger.info("scan restart failed")
+        return public_snapshot()
 
 
 @app.post("/api/algo-orders/arm-exit")

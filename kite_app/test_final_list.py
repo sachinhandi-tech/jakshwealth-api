@@ -1,3 +1,5 @@
+import time
+
 import kite_app.final_list as final_list
 
 
@@ -77,6 +79,10 @@ def test_stop_holds_the_scan_until_continue(monkeypatch):
 
         resumed = final_list.continue_scan({"api_key": "key", "access_token": "secret-token"})
         assert resumed["paused"] is False
+        for _ in range(50):
+            if forgotten and started:
+                break
+            time.sleep(0.02)
         assert started == ["key"]
         assert forgotten == [True]
         assert "secret-token" not in str(resumed)
