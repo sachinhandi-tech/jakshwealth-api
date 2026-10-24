@@ -93,6 +93,9 @@ def combine_books(posted: list[dict], signals: list[dict], cached: list[dict]) -
                 continue
             row = dict(stock)
             row["symbol"] = symbol
+            previous = by_symbol.get(symbol)
+            if previous and not row.get("exchange") and previous.get("exchange"):
+                row["exchange"] = previous["exchange"]
             if source is posted:
                 row["listed"] = True
             by_symbol[symbol] = row
@@ -100,14 +103,17 @@ def combine_books(posted: list[dict], signals: list[dict], cached: list[dict]) -
         symbol = str(signal.get("symbol") or "").upper()
         if not symbol:
             continue
+        exchange = str(signal.get("exchange") or "").upper()
         row = dict(by_symbol.get(symbol) or {
             "symbol": symbol,
             "company_name": signal.get("company_name") or symbol,
-            "exchange": "NSE",
+            "exchange": exchange or "NSE",
             "instrument_type": "EQ",
             "candles": [],
         })
         row["symbol"] = symbol
+        if exchange:
+            row["exchange"] = exchange
         row["listed"] = True
         if not row.get("company_name"):
             row["company_name"] = signal.get("company_name") or symbol
@@ -363,8 +369,8 @@ def _traps(candles: list[dict], breakout: Optional[dict], rsi: float, atr: float
 def _market_policy(exchange: str, instrument_type: str) -> dict:
     market = exchange.upper()
     kind = instrument_type.upper()
-    if market == "NSE" and kind in {"", "EQ"}:
-        return {"exchange": "NSE", "segment": "equity", "gtt": True, "product": "CNC"}
+    if market in {"NSE", "BSE"} and kind in {"", "EQ"}:
+        return {"exchange": market, "segment": "equity", "gtt": True, "product": "CNC"}
     if market == "NFO" and kind in {"FUT", "CE", "PE"}:
         return {"exchange": "NFO", "segment": "stock_derivative", "gtt": True, "product": "NRML"}
     if market == "MCX" and kind == "FUT":

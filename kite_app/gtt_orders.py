@@ -1,4 +1,4 @@
-"""Live buy-GTT placement. A confirmed request places one NSE CNC buy GTT on Kite."""
+"""Live buy-GTT placement. A confirmed request places one cash-equity CNC buy GTT on Kite."""
 
 from __future__ import annotations
 
@@ -404,7 +404,7 @@ def _contracts(instruments: list) -> dict[tuple[str, str], dict]:
 
 
 def _product(contract: dict) -> str:
-    if contract["exchange"] == "NSE" and contract["instrument_type"] in {"", "EQ"}:
+    if contract["exchange"] in {"NSE", "BSE"} and contract["instrument_type"] in {"", "EQ"}:
         return "CNC"
     return "NRML"
 
@@ -412,7 +412,7 @@ def _product(contract: dict) -> str:
 def _buy_quantity(contract: dict, price: Decimal) -> tuple[int, str]:
     exchange = contract["exchange"]
     kind = contract["instrument_type"]
-    if exchange == "NSE" and kind in {"", "EQ"}:
+    if exchange in {"NSE", "BSE"} and kind in {"", "EQ"}:
         quantity = share_quantity(price)
         if quantity < 1:
             return 0, "One lakh rupees does not buy one share at this price."
@@ -427,7 +427,7 @@ def _buy_quantity(contract: dict, price: Decimal) -> tuple[int, str]:
 def _sell_quantity(contract: dict, price: Decimal, held: int) -> int:
     exchange = contract["exchange"]
     kind = contract["instrument_type"]
-    if exchange == "NSE" and kind in {"", "EQ"}:
+    if exchange in {"NSE", "BSE"} and kind in {"", "EQ"}:
         return min(held, share_quantity(price))
     if (exchange == "NFO" and kind in {"FUT", "CE", "PE"}) or (exchange == "MCX" and kind == "FUT"):
         lot = contract["lot_size"]
@@ -438,7 +438,7 @@ def _sell_quantity(contract: dict, price: Decimal, held: int) -> int:
 
 
 def _size_message(contract: dict, price: Decimal) -> str:
-    if contract["exchange"] == "NSE" and contract["instrument_type"] in {"", "EQ"}:
+    if contract["exchange"] in {"NSE", "BSE"} and contract["instrument_type"] in {"", "EQ"}:
         if share_quantity(price) < 1:
             return "One lakh rupees does not buy one share at this price."
         return "The holding is smaller than one share."
@@ -504,11 +504,11 @@ def _day_buy_orders(orders: list) -> dict[str, dict]:
             continue
         exchange = str(order.get("exchange") or "").upper()
         product = str(order.get("product") or "").upper()
-        if exchange == "NSE" and product not in {"CNC", "DELIVERY"}:
+        if exchange in {"NSE", "BSE"} and product not in {"CNC", "DELIVERY"}:
             continue
         if exchange in {"NFO", "MCX"} and product != "NRML":
             continue
-        if exchange not in {"NSE", "NFO", "MCX"}:
+        if exchange not in {"NSE", "BSE", "NFO", "MCX"}:
             continue
         if str(order.get("transaction_type") or "").upper() != "BUY":
             continue

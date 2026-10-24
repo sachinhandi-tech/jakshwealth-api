@@ -27,6 +27,11 @@ class FakeKite:
 def test_equity_universe_keeps_regular_shares_only(monkeypatch):
     class Instruments:
         def instruments(self, exchange):
+            if exchange == "BSE":
+                return [
+                    {"exchange": "BSE", "segment": "BSE", "instrument_type": "EQ", "tradingsymbol": "INFY", "name": "Infosys", "instrument_token": 11},
+                    {"exchange": "BSE", "segment": "BSE", "instrument_type": "EQ", "tradingsymbol": "BSEONLY", "name": "Bse Only", "instrument_token": 12},
+                ]
             assert exchange == "NSE"
             return [
                 {"exchange": "NSE", "segment": "NSE", "instrument_type": "EQ", "tradingsymbol": "TCS", "name": "Tata", "instrument_token": 2},
@@ -43,8 +48,10 @@ def test_equity_universe_keeps_regular_shares_only(monkeypatch):
     monkeypatch.setattr("kite_app.scanner_data._universe_cache", None)
     rows = equity_universe(Instruments())
 
-    assert [row["ticker"] for row in rows] == ["BAJAJ-AUTO", "INFY", "RELIANCE-BE", "TCS"]
-    assert rows[1]["token"] == 1
+    assert [row["ticker"] for row in rows] == ["BAJAJ-AUTO", "BSEONLY", "INFY", "RELIANCE-BE", "TCS"]
+    assert next(row for row in rows if row["ticker"] == "BSEONLY")["exchange"] == "BSE"
+    assert next(row for row in rows if row["ticker"] == "INFY")["exchange"] == "NSE"
+    assert next(row for row in rows if row["ticker"] == "INFY")["token"] == 1
 
 
 def test_scanner_payload_caches_candles_without_secrets(monkeypatch, tmp_path):

@@ -35,7 +35,104 @@ _PUBLIC_FIELDS = (
     "scanned",
     "skipped",
     "signals",
+    "scan_all_nse",
 )
+
+
+_FILLING = False
+_EQUITY_NOTE = "The backend is reading NSE and BSE equities. A name appears here after it passes the moving-average crossover, the price and volume expansion, and the RSI momentum and ATR screen."
+
+
+def ensure_listed_equity_scan(record: Optional[dict]) -> str:
+    """Start one full cash-equity read when today's scans do not cover the universe."""
+    if not record or not record.get("api_key") or not record.get("access_token"):
+        return ""
+    try:
+        if _equity_scan_active():
+            _start_cache_fill(record)
+            return _EQUITY_NOTE
+        if _equity_scan_covers_universe():
+            _start_cache_fill(record)
+            return ""
+        enqueue_scan(record, _equity_params("crossover", 20, 50, 60))
+        enqueue_scan(record, _equity_params("price", 200, 200, 120))
+        _start_cache_fill(record)
+    except Exception:
+        logger.info("listed equity scan was not started")
+        return ""
+    return _EQUITY_NOTE
+
+
+def _equity_params(scan_mode: str, long_window: int, trend_window: int, lookback_days: int) -> dict:
+    return {
+        "scan_mode": scan_mode,
+        "ma_type": "ema" if scan_mode == "crossover" else "sma",
+        "short_type": "ema" if scan_mode == "crossover" else "sma",
+        "long_type": "sma",
+        "short_window": 20 if scan_mode == "crossover" else 2,
+        "long_window": long_window,
+        "trend_window": trend_window,
+        "lookback_days": lookback_days,
+        "max_stocks": 8000,
+        "scan_all_nse": True,
+    }
+
+
+def _equity_scan_active() -> bool:
+    if not _use_database():
+        return any(_is_equity_request(row.get("request_json")) and row.get("status") == "running" for row in _MEMORY.values())
+    db = get_sessionmaker()()
+    try:
+        jobs = db.query(SignalScanJob).filter(SignalScanJob.status == "running").all()
+    finally:
+        db.close()
+    return any(_is_equity_request(job.request_json) for job in jobs)
+
+
+def _is_equity_request(raw: Optional[str]) -> bool:
+    try:
+        params = json.loads(raw or "")
+    except json.JSONDecodeError:
+        return False
+    return bool(params.get("scan_all_nse"))
+
+
+def _equity_scan_covers_universe() -> bool:
+    saved = latest_crossover_scans()
+    for kind in ("short", "long"):
+        result = saved.get(kind) or {}
+        if result.get("scan_all_nse") is not True:
+            return False
+        universe = int(result.get("universe") or 0)
+        covered = int(result.get("scanned") or 0) + int(result.get("skipped") or 0)
+        if universe <= 0 or covered < universe:
+            return False
+    return True
+
+
+def _start_cache_fill(record: dict) -> None:
+    global _FILLING
+    if _FILLING:
+        return
+    _FILLING = True
+
+    def fill() -> None:
+        global _FILLING
+        try:
+            from kite_app.scanner_data import build_scanner_payload
+
+            kite = KiteConnect(api_key=record["api_key"])
+            kite.set_access_token(record["access_token"])
+            for _ in range(40):
+                payload = build_scanner_payload(kite, budget_seconds=45)
+                if (payload.get("metadata") or {}).get("complete") is True:
+                    return
+        except Exception:
+            logger.info("equity candle fill stopped")
+        finally:
+            _FILLING = False
+
+    threading.Thread(target=fill, args=(), daemon=True).start()
 
 
 def enqueue_scan(record: dict, params: dict) -> str:
@@ -125,6 +222,7 @@ def latest_crossover_signals() -> list[dict]:
                 "symbol": symbol,
                 "company_name": signal.get("company") or signal.get("company_name") or symbol,
                 "crossover_type": signal.get("crossover_type") or "",
+                "exchange": str(signal.get("exchange") or "NSE").upper() or "NSE",
             })
     return rows
 
@@ -164,6 +262,7 @@ def run_scan_job(job_id: str) -> None:
         budget = 1200 if scan_all_nse else 180
         
         result = scan_nifty100_parallel_cached(kite, budget_seconds=budget, **params)
+        result["scan_all_nse"] = bool(scan_all_nse)
         _finish(job_id, "done", json.dumps(result), None)
         save_crossover_list(str(params.get("scan_mode") or result.get("scan_mode") or ""), result)
         

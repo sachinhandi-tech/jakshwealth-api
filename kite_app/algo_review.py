@@ -145,7 +145,6 @@ def _ask_grok(key: str, model: str, facts: dict) -> tuple:
         "max_output_tokens": 1200,
         "store": True,
         "tools": tools,
-        "search_parameters": {"mode": "off"},
     }
     sources = []
     for _ in range(4):
@@ -176,7 +175,6 @@ def _ask_grok(key: str, model: str, facts: dict) -> tuple:
             "max_output_tokens": 1200,
             "store": True,
             "tools": tools,
-            "search_parameters": {"mode": "off"},
         }
     raise ModelCallError("research tools did not finish")
 

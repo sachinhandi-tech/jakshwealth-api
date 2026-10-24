@@ -77,34 +77,37 @@ def _regular_equity(symbol: str, company: str) -> bool:
 
 
 def equity_universe(kite) -> list[dict]:
-    """NSE equity shares. This is the price-volume-expansion universe."""
+    """NSE equity shares, plus BSE shares that are not already listed on NSE."""
     global _universe_cache
     now = time.monotonic()
     if _universe_cache and now - _universe_cache[0] < CACHE_SECONDS:
         return _universe_cache[1]
-    try:
-        instruments = kite.instruments("NSE") or []
-    except TokenException:
-        raise
-    except KiteException as exc:
-        raise SignalScanError("Kite could not load NSE instruments.") from exc
     rows = []
     seen = set()
-    for instrument in instruments:
-        if not isinstance(instrument, dict):
+    for exchange in ("NSE", "BSE"):
+        try:
+            instruments = kite.instruments(exchange) or []
+        except TokenException:
+            raise
+        except KiteException as exc:
+            if exchange == "NSE":
+                raise SignalScanError("Kite could not load NSE instruments.") from exc
             continue
-        if instrument.get("exchange") != "NSE" or instrument.get("instrument_type") != "EQ":
-            continue
-        segment = str(instrument.get("segment") or "NSE")
-        if segment != "NSE":
-            continue
-        symbol = str(instrument.get("tradingsymbol") or "").strip().upper()
-        token = instrument.get("instrument_token")
-        company = str(instrument.get("name") or symbol).strip() or symbol
-        if not symbol or symbol in seen or token is None or not _regular_equity(symbol, company):
-            continue
-        seen.add(symbol)
-        rows.append({"ticker": symbol, "company": company, "token": int(token)})
+        for instrument in instruments:
+            if not isinstance(instrument, dict):
+                continue
+            if instrument.get("exchange") != exchange or instrument.get("instrument_type") != "EQ":
+                continue
+            segment = str(instrument.get("segment") or exchange)
+            if segment != exchange:
+                continue
+            symbol = str(instrument.get("tradingsymbol") or "").strip().upper()
+            token = instrument.get("instrument_token")
+            company = str(instrument.get("name") or symbol).strip() or symbol
+            if not symbol or symbol in seen or token is None or not _regular_equity(symbol, company):
+                continue
+            seen.add(symbol)
+            rows.append({"ticker": symbol, "company": company, "token": int(token), "exchange": exchange})
     rows.sort(key=lambda row: row["ticker"])
     if not rows:
         raise SignalScanError("Kite returned no NSE equity instruments.")
@@ -164,6 +167,8 @@ def build_scanner_payload(kite, budget_seconds: Optional[float] = None) -> dict:
             "symbol": symbol,
             "company_name": constituent["company"],
             "instrument_token": int(token),
+            "exchange": str(constituent.get("exchange") or "NSE").upper() or "NSE",
+            "instrument_type": "EQ",
             "nifty_flags": {"nifty50": symbol in nifty50, "nifty100": symbol in nifty100},
             "candles": candles,
         }
@@ -231,6 +236,8 @@ def _empty_stock(constituent: dict, nifty50: set[str], nifty100: set[str]) -> di
         "symbol": symbol,
         "company_name": constituent["company"],
         "instrument_token": constituent.get("token"),
+        "exchange": str(constituent.get("exchange") or "NSE").upper() or "NSE",
+        "instrument_type": "EQ",
         "nifty_flags": {"nifty50": symbol in nifty50, "nifty100": symbol in nifty100},
         "candles": [],
     }

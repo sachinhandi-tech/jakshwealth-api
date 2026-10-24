@@ -18,7 +18,6 @@ from kite_app.signals import (
     latest_crossover,
     latest_price_cross,
     load_nifty100,
-    nse_equities,
     nse_equity_tokens,
 )
 from kite_app.signals_cache import get_candles_with_cache
@@ -42,6 +41,7 @@ def _scan_stock_cached(
     short_type: str,
     long_type: str,
     scan_mode: str,
+    exchange: str = "NSE",
 ) -> tuple[Optional[dict], str]:
     """Return a real crossover, or a status of none or skipped."""
     db_session = get_sessionmaker()()
@@ -88,6 +88,7 @@ def _scan_stock_cached(
         return {
             "ticker": ticker,
             "company": company or ticker,
+            "exchange": str(exchange or "NSE").upper() or "NSE",
             "reason": reason,
             **found,
         }, "signal"
@@ -121,7 +122,9 @@ def scan_nifty100_parallel_cached(
     db = get_sessionmaker()()
     try:
         if scan_all_nse:
-            constituents = nse_equities(kite)
+            from kite_app.scanner_data import equity_universe
+
+            constituents = equity_universe(kite)
         else:
             tokens = nse_equity_tokens(kite)
             constituents = [
@@ -166,6 +169,7 @@ def scan_nifty100_parallel_cached(
                     short_type,
                     long_type,
                     scan_mode,
+                    str(constituent.get("exchange") or "NSE"),
                 )
                 futures[future] = constituent["ticker"]
 

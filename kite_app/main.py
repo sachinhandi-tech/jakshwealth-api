@@ -444,7 +444,18 @@ def algo_setups(body: SetupRequest) -> dict:
         by_symbol[symbol] = row
     signals = list(by_symbol.values())
     remembered = history_by_ticker([signal["symbol"] for signal in signals]) if signals else []
-    return select_setups(combine_books(posted, signals, [*cached_equity(), *remembered]))
+    book = select_setups(combine_books(posted, signals, [*cached_equity(), *remembered]))
+    try:
+        record = service.saved_session()
+    except Exception:
+        record = None
+    if record:
+        from kite_app.scan_jobs import ensure_listed_equity_scan
+
+        note = ensure_listed_equity_scan(record)
+        if note:
+            book["universe_note"] = note
+    return book
 
 
 @app.post("/api/algo-orders/arm-exit")

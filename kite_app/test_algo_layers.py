@@ -351,7 +351,7 @@ def test_grok_model_posts_to_xai_and_returns_only_the_tool_text(monkeypatch):
     assert calls[0][1]["Authorization"] == "Bearer grok-test"
     assert "x-api-key" not in {name.lower() for name in calls[0][1]}
     assert calls[0][2]["model"] == "grok-4.7"
-    assert calls[0][2]["search_parameters"] == {"mode": "off"}
+    assert "search_parameters" not in calls[0][2]
     assert calls[0][2]["tools"][0]["name"] == "read_filings"
     assert calls[1][2]["previous_response_id"] == "resp_1"
     assert calls[1][2]["input"][0]["output"] == "Annual filing text"

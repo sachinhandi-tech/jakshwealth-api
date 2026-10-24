@@ -98,7 +98,6 @@ def history_by_ticker(tickers: list[str]) -> list[dict]:
                 best[row.ticker] = {
                     "symbol": row.ticker,
                     "company_name": row.ticker,
-                    "exchange": "NSE",
                     "instrument_type": "EQ",
                     "candles": candles,
                 }
