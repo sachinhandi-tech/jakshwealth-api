@@ -67,6 +67,10 @@ def ensure_listed_equity_scan(record: Optional[dict]) -> str:
             params["full_pass"] = True
             params["short_window"] = 20
             params["short_type"] = "ema"
+            from kite_app.desk_progress import note_activity
+
+            label = "NSE equities" if book == "equity" else "Commodity futures"
+            note_activity(f"Starting {label}.")
             enqueue_scan(record, params)
             return _EQUITY_NOTE
     except Exception:

@@ -8,6 +8,7 @@ _LOCK = threading.Lock()
 _SCANS: dict[str, dict] = {}
 _FILL = {"saved": 0, "universe": 0, "active": False}
 _PAUSED = False
+_ACTIVITY: list[str] = []
 
 
 def scan_paused() -> bool:
@@ -29,6 +30,23 @@ def resume_scan() -> None:
     global _PAUSED
     with _LOCK:
         _PAUSED = False
+
+
+def note_activity(text: str) -> None:
+    """Remember one short line the desk can show. Repeated lines stay as one."""
+    line = " ".join(str(text or "").split())
+    if not line:
+        return
+    with _LOCK:
+        if _ACTIVITY and _ACTIVITY[-1] == line:
+            return
+        _ACTIVITY.append(line)
+        del _ACTIVITY[:-8]
+
+
+def activity_status() -> list[str]:
+    with _LOCK:
+        return list(_ACTIVITY)
 
 
 def note_scan(mode: str, done: int, total: int, signals: int, running: bool) -> None:

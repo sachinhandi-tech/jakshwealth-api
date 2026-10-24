@@ -153,31 +153,18 @@ def _load_stocks() -> list[dict]:
 
 
 def _progress_lines() -> list[str]:
-    from kite_app.desk_progress import fill_status, scan_status
+    from kite_app.desk_progress import activity_status, scan_status
 
-    lines = []
-    fill = fill_status()
-    universe = int(fill.get("universe") or 0)
-    if fill.get("active") and universe:
-        lines.append(f"Saving prices and volume: {int(fill.get('saved') or 0)} of {universe} names.")
-    labels = {
-        "crossover": "Moving-average crossover",
-        "price": "Long moving average",
-    }
+    lines = activity_status()
     books = {
-        "equity": "Equities",
-        "stock_future": "Stock futures",
-        "stock_option": "Stock options",
+        "equity": "NSE equities",
         "commodity_future": "Commodity futures",
     }
     for mode, row in scan_status().items():
         total = int(row.get("total") or 0)
         if row.get("running") and total:
-            if ":" in mode:
-                book, kind = mode.split(":", 1)
-                label = f"{books.get(book, book)} {labels.get(kind, kind).lower()}"
-            else:
-                label = labels.get(mode, mode)
+            book = mode.split(":", 1)[0] if ":" in mode else "equity"
+            label = books.get(book, "Names")
             lines.append(f"{label}: {int(row.get('done') or 0)} of {total} names.")
     return lines
 
@@ -193,6 +180,7 @@ def _launch(record: dict) -> None:
                 _RECORD = record
                 _WORKING = True
                 _FOCUS = "Queued NSE equities and front-month commodity futures. Batches keep running if this page closes."
+            _remember(_FOCUS)
             return
     with _LOCK:
         _RECORD = record
@@ -202,6 +190,8 @@ def _launch(record: dict) -> None:
         _WORKING = True
         if not _FOCUS:
             _FOCUS = _READ_NOTE
+        focus = _FOCUS
+    _remember(focus)
     threading.Thread(target=_loop, daemon=True).start()
 
 
@@ -438,12 +428,20 @@ def _set_working(working: bool, focus: str) -> None:
     with _LOCK:
         _WORKING = working
         _FOCUS = focus
+    _remember(focus)
 
 
 def _set_focus(focus: str) -> None:
     global _FOCUS
     with _LOCK:
         _FOCUS = focus
+    _remember(focus)
+
+
+def _remember(focus: str) -> None:
+    from kite_app.desk_progress import note_activity
+
+    note_activity(focus)
 
 
 def _review_key(item: dict) -> str:

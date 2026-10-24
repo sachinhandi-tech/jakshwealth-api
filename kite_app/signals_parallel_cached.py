@@ -167,7 +167,11 @@ def scan_nifty100_parallel_cached(
 
     db = get_sessionmaker()()
     try:
+        from kite_app.desk_progress import note_activity
+
+        book_label = "Commodity futures" if book == "commodity_future" else "NSE equities"
         if scan_all_nse:
+            note_activity(f"Asking Zerodha for the {book_label} list.")
             from kite_app.scanner_data import trade_universe
 
             wanted = book or "equity"
@@ -195,6 +199,8 @@ def scan_nifty100_parallel_cached(
 
         constituents = constituents[:max_stocks]
         universe_count = len(constituents)
+        if scan_all_nse:
+            note_activity(f"{book_label}: {universe_count} names. Reading daily prices.")
         skipped = 0
         queued = []
         for constituent in constituents:
@@ -298,6 +304,10 @@ def scan_nifty100_parallel_cached(
             from kite_app.desk_progress import note_scan
 
             note_scan(progress_key, scanned, universe_count, len(signals), False)
+            if scan_all_nse and universe_count:
+                from kite_app.desk_progress import note_activity
+
+                note_activity(f"{book_label}: read {scanned} of {universe_count} names.")
         except Exception:
             pass
         db.close()
