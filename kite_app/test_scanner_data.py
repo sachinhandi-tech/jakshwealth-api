@@ -47,6 +47,10 @@ def test_equity_universe_keeps_regular_shares_only(monkeypatch):
             ]
 
     monkeypatch.setattr("kite_app.scanner_data._universe_cache", None)
+    monkeypatch.setattr(
+        "kite_app.scanner_data.listed_cap_symbols",
+        lambda: {"BAJAJ-AUTO", "INFY", "RELIANCE-BE", "TCS"},
+    )
     rows = equity_universe(Instruments())
 
     assert [row["ticker"] for row in rows] == ["BAJAJ-AUTO", "INFY", "RELIANCE-BE", "TCS"]
@@ -87,6 +91,7 @@ def test_trade_universe_splits_shares_futures_options_and_commodities(monkeypatc
             return []
 
     monkeypatch.setattr("kite_app.scanner_data._universe_cache", None)
+    monkeypatch.setattr("kite_app.scanner_data.listed_cap_symbols", lambda: {"RELIANCE", "GOLD"})
     from kite_app.scanner_data import trade_universe
 
     rows = trade_universe(Instruments())
@@ -97,7 +102,7 @@ def test_trade_universe_splits_shares_futures_options_and_commodities(monkeypatc
     assert by_book["equity"] == ["RELIANCE"]
     assert "stock_future" not in by_book
     assert "stock_option" not in by_book
-    assert by_book["commodity_future"] == ["GOLD26NOVFUT"]
+    assert "commodity_future" not in by_book
 
 
 def test_scanner_payload_caches_candles_without_secrets(monkeypatch, tmp_path):

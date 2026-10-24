@@ -27,8 +27,8 @@ _PASS_LIMIT = 80
 _SLICE = 250
 
 
-_LOGIN_NOTE = "Log in to Zerodha to read NSE equities and commodity futures."
-_READ_NOTE = "Reading NSE equities and front-month commodity futures."
+_LOGIN_NOTE = "Log in to Zerodha to read NSE large, mid, and small cap equities."
+_READ_NOTE = "Reading NSE large, mid, and small cap equities."
 _STOP_NOTE = "Scan stopped. Start from zero when you want a new read from the first name."
 
 
@@ -114,12 +114,12 @@ def public_snapshot() -> dict:
         focus = _FOCUS
     lines = _progress_lines()
     progress = _scan_progress()
-    if focus and focus not in lines and "% remaining." not in focus:
+    if focus and focus not in lines and "% remaining." not in focus and not _scan_chatter(focus):
         lines.append(focus)
     if progress:
-        count_line = _count_line()
-        lines = [line for line in lines if "% remaining." not in line]
-        lines.append(count_line)
+        kept = [line for line in lines if not _scan_chatter(line) and "% remaining." not in line]
+        kept.append(_count_line())
+        lines = kept
     if not lines:
         lines = [_READ_NOTE]
     activity = []
@@ -182,12 +182,11 @@ def _review_rows(rows: list[dict]) -> None:
 def _load_stocks() -> list[dict]:
     from kite_app.algo_layers import combine_books
     from kite_app.scan_jobs import latest_crossover_signals
-    from kite_app.scanner_data import cached_equity
     from kite_app.signals_cache import history_by_ticker
 
     signals = latest_crossover_signals()
     remembered = history_by_ticker([signal["symbol"] for signal in signals]) if signals else []
-    return combine_books([], signals, [*cached_equity(), *remembered])
+    return combine_books([], signals, remembered)
 
 
 def _progress_lines() -> list[str]:
@@ -206,7 +205,7 @@ def _progress_lines() -> list[str]:
             book = mode.split(":", 1)[0] if ":" in mode else "equity"
             label = books.get(book, "Names")
             done = int(row.get("done") or 0)
-            remaining = 0 if total <= 0 else round(max(total - done, 0) * 100 / total)
+            remaining = _remaining_percent(done, total)
             lines.append(f"{label}: {done} of {total} names. {remaining}% remaining.")
     return lines
 
@@ -222,6 +221,26 @@ def _count_line() -> str:
     )
 
 
+def _remaining_percent(done: int, total: int) -> int:
+    if total <= 0 or done <= 0:
+        return 100 if total > 0 else 0
+    if done >= total:
+        return 0
+    return min(round((total - done) * 100 / total), 99)
+
+
+def _scan_chatter(text: str) -> bool:
+    line = str(text or "").strip()
+    return (
+        line.startswith("Asking Zerodha")
+        or line.startswith("Starting NSE")
+        or line.startswith("Starting Commodity")
+        or line.startswith("Saved prices already cover")
+        or line.startswith("NSE equities:")
+        or line.startswith("Commodity futures:")
+    )
+
+
 def _scan_progress() -> Optional[dict]:
     from kite_app.desk_progress import scan_status
 
@@ -229,6 +248,8 @@ def _scan_progress() -> Optional[dict]:
         "equity": "NSE equities",
         "commodity_future": "Commodity futures",
     }
+    running_book = None
+    running_screen = None
     chosen = None
     for mode, row in scan_status().items():
         total = int(row.get("total") or 0)
@@ -236,18 +257,21 @@ def _scan_progress() -> Optional[dict]:
             continue
         book = mode.split(":", 1)[0] if ":" in mode else "equity"
         done = int(row.get("done") or 0)
-        remaining = max(total - done, 0)
         payload = {
             "done": done,
             "total": total,
             "label": str(row.get("label") or "") or books.get(book, "Names"),
             "action": str(row.get("action") or "scanned"),
-            "remaining_percent": round(remaining * 100 / total),
+            "remaining_percent": _remaining_percent(done, total),
         }
-        if row.get("running"):
-            return payload
         chosen = payload
-    return chosen
+        if not row.get("running"):
+            continue
+        if mode == "screen":
+            running_screen = payload
+        elif running_book is None:
+            running_book = payload
+    return running_book or running_screen or chosen
 
 
 def _launch(record: dict) -> None:

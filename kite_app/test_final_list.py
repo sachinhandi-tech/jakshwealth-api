@@ -108,6 +108,28 @@ def test_screening_shows_how_many_names_remain(monkeypatch):
         clear_activity()
 
 
+def test_live_book_count_is_not_replaced_by_the_old_cache():
+    from kite_app.desk_progress import clear_activity, note_activity, note_scan
+
+    clear_activity()
+    note_activity("NSE equities: read 500 of 500 names.")
+    note_activity("Starting NSE equities.")
+    note_activity("Asking Zerodha for the NSE equities list.")
+    note_scan("equity:price", 400, 500, 0, True)
+    note_scan("screen", 24, 6554, 0, True, label="names", action="screened")
+    try:
+        snap = final_list.public_snapshot()
+        assert snap["progress"]["done"] == 400
+        assert snap["progress"]["total"] == 500
+        assert snap["progress"]["label"] == "NSE equities"
+        assert snap["progress"]["remaining_percent"] == 20
+        assert all("6,554" not in line["text"] and "6554" not in line["text"] for line in snap["activity"])
+        assert all("Starting NSE" not in line["text"] for line in snap["activity"])
+        assert "400 of 500" in snap["activity"][-1]["text"]
+    finally:
+        clear_activity()
+
+
 def test_stop_holds_the_scan_until_continue(monkeypatch):
     from kite_app.desk_progress import resume_scan
 

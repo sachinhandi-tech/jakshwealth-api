@@ -42,10 +42,9 @@ _PUBLIC_FIELDS = (
 
 
 _FILLING = False
-_EQUITY_NOTE = "The backend is reading NSE equities and front-month commodity futures. A name appears in its list after it passes the moving-average crossover, the price and volume expansion, and the RSI momentum and ATR screen."
+_EQUITY_NOTE = "The backend is reading NSE large, mid, and small cap equities. A name appears in its list after it passes the moving-average crossover, the price and volume expansion, and the RSI momentum and ATR screen."
 _BOOKS = (
-    ("equity", 2500),
-    ("commodity_future", 200),
+    ("equity", 600),
 )
 
 
@@ -75,8 +74,7 @@ def ensure_listed_equity_scan(record: Optional[dict]) -> str:
             params["short_type"] = "ema"
             from kite_app.desk_progress import note_activity
 
-            label = "NSE equities" if book == "equity" else "Commodity futures"
-            note_activity(f"Starting {label}.")
+            note_activity("Starting NSE equities.")
             enqueue_scan(record, params)
             return _EQUITY_NOTE
     except Exception:
@@ -117,7 +115,7 @@ def _is_equity_request(raw: Optional[str]) -> bool:
         params = json.loads(raw or "")
     except json.JSONDecodeError:
         return False
-    return bool(params.get("scan_all_nse"))
+    return bool(params.get("scan_all_nse")) and str(params.get("book") or "equity") == "equity"
 
 
 def equity_work_pending() -> bool:

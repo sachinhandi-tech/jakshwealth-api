@@ -320,7 +320,7 @@ def test_finished_commodity_pass_is_kept(monkeypatch):
         }
         scan_jobs.ensure_listed_equity_scan({"api_key": "k", "access_token": "t"})
         assert started == []
-        assert scan_jobs._MEMORY["again"]["status"] != "running"
+        assert "commodity_future" not in started
     finally:
         scan_jobs._MEMORY.clear()
         scan_jobs._LISTS.clear()

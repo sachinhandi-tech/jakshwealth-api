@@ -116,15 +116,15 @@ def equity_universe(kite) -> list[dict]:
 
 
 def trade_universe(kite) -> list[dict]:
-    """NSE cash shares and the nearest commodity-future expiry."""
+    """NSE large, mid, and small cap shares. Commodities, futures, and options are not included."""
     global _universe_cache
     now = time.monotonic()
     if _universe_cache and now - _universe_cache[0] < CACHE_SECONDS:
         return _universe_cache[1]
-    rows = _cash_rows(kite)
-    rows.extend(_commodity_rows(kite))
-    if not any(row["book"] == "equity" and row["exchange"] == "NSE" for row in rows):
-        raise SignalScanError("Kite returned no NSE equity instruments.")
+    allowed = listed_cap_symbols()
+    rows = [row for row in _cash_rows(kite) if row["ticker"] in allowed]
+    if not rows:
+        raise SignalScanError("Kite returned no NSE large, mid, or small cap shares.")
     rows.sort(key=lambda row: (row["book"], row["ticker"]))
     _universe_cache = (now, rows)
     return rows
@@ -197,30 +197,53 @@ def _front_expiry(rows: list[dict]) -> list[dict]:
     return [row for row in rows if row["expiry"] == nearest.get(row["company"])]
 
 
-def _commodity_rows(kite) -> list[dict]:
-    rows = []
-    today = datetime.now(timezone.utc).date()
-    for instrument in _load_instruments(kite, "MCX"):
-        if not isinstance(instrument, dict) or instrument.get("exchange") != "MCX":
+_CAP_LISTS = (
+    (
+        "https://www.niftyindices.com/IndexConstituent/ind_nifty100list.csv",
+        "https://nsearchives.nseindia.com/content/indices/ind_nifty100list.csv",
+    ),
+    (
+        "https://www.niftyindices.com/IndexConstituent/ind_niftymidcap150list.csv",
+        "https://nsearchives.nseindia.com/content/indices/ind_niftymidcap150list.csv",
+    ),
+    (
+        "https://www.niftyindices.com/IndexConstituent/ind_niftysmallcap250list.csv",
+        "https://nsearchives.nseindia.com/content/indices/ind_niftysmallcap250list.csv",
+    ),
+)
+_cap_cache: Optional[tuple[float, set[str]]] = None
+
+
+def listed_cap_symbols() -> set[str]:
+    """NSE large, mid, and small cap symbols: Nifty 100, Midcap 150, and Smallcap 250."""
+    global _cap_cache
+    now = time.monotonic()
+    if _cap_cache and now - _cap_cache[0] < CACHE_SECONDS:
+        return set(_cap_cache[1])
+    found: set[str] = set()
+    for urls in _CAP_LISTS:
+        found.update(_index_symbols(urls))
+    if len(found) < 400:
+        if _cap_cache:
+            return set(_cap_cache[1])
+        raise SignalScanError("The large, mid, and small cap lists could not be loaded.")
+    _cap_cache = (now, found)
+    return set(found)
+
+
+def _index_symbols(urls: tuple[str, str]) -> set[str]:
+    for url in urls:
+        try:
+            response = requests.get(
+                url,
+                headers={"User-Agent": "Mozilla/5.0", "Accept": "text/csv,*/*"},
+                timeout=8,
+            )
+            response.raise_for_status()
+            return {row["ticker"] for row in parse_nifty100_csv(response.text)}
+        except (SignalScanError, requests.RequestException, OSError):
             continue
-        if str(instrument.get("instrument_type") or "").upper() != "FUT":
-            continue
-        symbol = str(instrument.get("tradingsymbol") or "").strip().upper()
-        token = instrument.get("instrument_token")
-        expiry = _as_date(instrument.get("expiry"))
-        company = str(instrument.get("name") or symbol).strip() or symbol
-        if not symbol or token is None or expiry is None or expiry < today:
-            continue
-        rows.append({
-            "ticker": symbol,
-            "company": company,
-            "token": int(token),
-            "exchange": "MCX",
-            "instrument_type": "FUT",
-            "book": "commodity_future",
-            "expiry": expiry,
-        })
-    return _front_expiry(rows)
+    return set()
 
 
 def build_scanner_payload(kite, budget_seconds: Optional[float] = None) -> dict:

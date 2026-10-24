@@ -379,8 +379,6 @@ def _market_policy(exchange: str, instrument_type: str) -> dict:
         return {"exchange": "NFO", "segment": "stock_future", "gtt": True, "product": "NRML"}
     if market == "NFO" and kind in {"CE", "PE"}:
         return {"exchange": "NFO", "segment": "stock_option", "gtt": True, "product": "NRML"}
-    if market == "MCX" and kind == "FUT":
-        return {"exchange": "MCX", "segment": "commodity_future", "gtt": True, "product": "NRML"}
     return {"exchange": market or "NSE", "segment": "unsupported", "gtt": False, "product": ""}
 
 
@@ -530,8 +528,6 @@ def _reason(stock: dict, breakout: Optional[dict], screens: dict, rsi: float, at
         text += " The buy is one lakh rupees of shares, sized from the entry. A confirmed holding can place one NSE CNC two-leg sell GTT at the stop and the 2R target."
     elif policy["segment"] in {"stock_future", "stock_option"}:
         text += " The order is one lot on NFO, product NRML, and it is not an equity delivery order."
-    elif policy["segment"] == "commodity_future":
-        text += " The order is one lot on MCX, product NRML, and it is not an equity delivery order."
     else:
         text += " This contract is not sent to Kite."
     if traps:

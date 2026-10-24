@@ -201,12 +201,11 @@ def test_derivatives_are_one_lot_and_not_delivery_orders():
     commodity = evaluate_stock(_retest_stock("CRUDEOIL", "MCX", "FUT"))
     assert future["gtt_tradable"] is True
     assert option["gtt_tradable"] is True
-    assert commodity["gtt_tradable"] is True
+    assert commodity["gtt_tradable"] is False
     assert future["quantity_basis"] == "one_lot"
     assert future["quantity"] is None
     assert future["product"] == "NRML"
-    assert "one lot" in commodity["reason"]
-    assert "equity delivery" in commodity["reason"]
+    assert "not sent to Kite" in commodity["reason"]
 
 
 def test_walk_exit_uses_the_stop_when_one_bar_hits_both():
