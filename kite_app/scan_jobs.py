@@ -62,6 +62,9 @@ def ensure_listed_equity_scan(record: Optional[dict]) -> str:
             if _book_running(book):
                 if _scan_is_live(book):
                     return _EQUITY_NOTE
+                if _book_covered(book):
+                    _release_stale_run(book, force=True)
+                    continue
                 if not _release_stale_run(book):
                     return _EQUITY_NOTE
             if _book_covered(book):
@@ -128,18 +131,59 @@ def _equity_scan_covers_universe() -> bool:
 
 def _book_covered(book: str) -> bool:
     saved = _stored_lists()
+    missing = []
     for kind in ("short", "long"):
-        key = kind if book == "equity" else f"{book}-{kind}"
-        result = saved.get(key) or {}
-        if result.get("empty_book") is True:
+        result = saved.get(_coverage_key(book, kind)) or {}
+        if _covers_book(result):
             continue
-        if result.get("scan_all_nse") is not True:
-            return False
-        universe = int(result.get("universe") or 0)
-        covered = int(result.get("scanned") or 0) + int(result.get("skipped") or 0)
-        if universe <= 0 or covered < universe:
-            return False
+        missing.append(kind)
+    if not missing:
+        return True
+    finished = _latest_done_book(book)
+    if not _covers_book(finished):
+        return False
+    for kind in missing:
+        save_crossover_list(kind, {**finished, "book": book})
     return True
+
+
+def _covers_book(result: Optional[dict]) -> bool:
+    if not isinstance(result, dict):
+        return False
+    if result.get("empty_book") is True:
+        return True
+    if result.get("scan_all_nse") is not True:
+        return False
+    universe = int(result.get("universe") or 0)
+    covered = int(result.get("scanned") or 0) + int(result.get("skipped") or 0)
+    return universe > 0 and covered >= universe
+
+
+def _coverage_key(book: str, kind: str) -> str:
+    """Saved-list id. The horizon column is 16 characters, so commodity cannot use its full book name."""
+    if book == "commodity_future":
+        return f"mcx-{kind}"
+    if not book or book == "equity":
+        return kind
+    return ""
+
+
+def _latest_done_book(book: str) -> dict:
+    try:
+        rows = _done_scans()
+    except Exception:
+        logger.info("saved scan coverage could not be read")
+        return {}
+    for row in rows:
+        if _request_book(row.get("request_json")) != book:
+            continue
+        try:
+            result = json.loads(row.get("result_json") or "")
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if isinstance(result, dict):
+            return result
+    return {}
 
 
 def _scan_is_live(book: str) -> bool:
@@ -152,16 +196,17 @@ def _scan_is_live(book: str) -> bool:
     return False
 
 
-def _release_stale_run(book: str) -> bool:
+def _release_stale_run(book: str, force: bool = False) -> bool:
     """Release a pass whose thread is gone. A live NSE read takes longer than a few minutes, so a young row is left alone."""
     cutoff = datetime.now(timezone.utc) - timedelta(seconds=1800)
+    reason = "This read is already saved." if force else "The scan stopped before it could report progress."
     if not _use_database():
         stale = [
             job_id for job_id, row in _MEMORY.items()
             if row.get("status") == "running" and _request_book(row.get("request_json")) == book
         ]
         for job_id in stale:
-            _finish(job_id, "error", None, "The scan stopped before it could report progress.")
+            _finish(job_id, "error", None, reason)
         return bool(stale)
     db = get_sessionmaker()()
     try:
@@ -175,9 +220,9 @@ def _release_stale_run(book: str) -> bool:
         created = job.created_at
         if created is not None and created.tzinfo is None:
             created = created.replace(tzinfo=timezone.utc)
-        if created is not None and created > cutoff:
+        if not force and created is not None and created > cutoff:
             return False
-        _finish(job.job_id, "error", None, "The scan stopped before it could report progress.")
+        _finish(job.job_id, "error", None, reason)
         released = True
     return released
 
@@ -298,7 +343,9 @@ def save_crossover_list(scan_mode: str, result: dict) -> None:
         return
     kind = scan_mode if scan_mode in {"short", "long"} else _horizon(scan_mode or str(result.get("scan_mode") or ""))
     book = str(result.get("book") or "equity")
-    key = kind if book == "equity" else f"{book}-{kind}"
+    key = _coverage_key(book, kind)
+    if not key:
+        return
     public = _public_result(result)
     public["scan_mode"] = "price" if kind == "long" else public.get("scan_mode") or "crossover"
     public["book"] = book
@@ -461,6 +508,8 @@ def forget_saved_scans() -> None:
     keys = (
         "short",
         "long",
+        "mcx-short",
+        "mcx-long",
         "commodity_future-short",
         "commodity_future-long",
         "stock_future-short",

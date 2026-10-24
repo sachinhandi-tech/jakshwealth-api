@@ -268,6 +268,64 @@ def test_final_call_reads_the_saved_list_from_redis_before_the_jobs(monkeypatch)
     assert "crossover:short" in store
 
 
+def test_finished_commodity_pass_is_kept(monkeypatch):
+    import json
+
+    from kite_app import scan_jobs
+    from kite_app.desk_progress import clear_activity, resume_scan
+
+    monkeypatch.setattr(scan_jobs, "_use_database", lambda: False)
+    clear_activity()
+    scan_jobs._MEMORY.clear()
+    scan_jobs._LISTS.clear()
+    started = []
+    monkeypatch.setattr(scan_jobs, "enqueue_scan", lambda record, params: started.append(params["book"]) or "job")
+    resume_scan()
+    try:
+        scan_jobs._MEMORY["mcx"] = {
+            "status": "done",
+            "request_json": json.dumps({
+                "scan_all_nse": True,
+                "book": "commodity_future",
+                "scan_mode": "price",
+            }),
+            "result_json": json.dumps({
+                "book": "commodity_future",
+                "scan_all_nse": True,
+                "universe": 31,
+                "scanned": 31,
+                "skipped": 0,
+                "signals": [],
+            }),
+        }
+        covered = {
+            "book": "equity",
+            "scan_all_nse": True,
+            "universe": 2500,
+            "scanned": 2500,
+            "skipped": 0,
+        }
+        scan_jobs._LISTS["short"] = dict(covered)
+        scan_jobs._LISTS["long"] = dict(covered)
+        assert scan_jobs._book_covered("commodity_future") is True
+        assert "mcx-short" in scan_jobs._LISTS
+        assert "mcx-long" in scan_jobs._LISTS
+        assert "commodity_future-short" not in scan_jobs._LISTS
+        assert all(len(key) <= 16 for key in scan_jobs._LISTS)
+        scan_jobs._MEMORY["again"] = {
+            "status": "running",
+            "request_json": json.dumps({"scan_all_nse": True, "book": "commodity_future"}),
+            "result_json": None,
+            "error": None,
+        }
+        scan_jobs.ensure_listed_equity_scan({"api_key": "k", "access_token": "t"})
+        assert started == []
+        assert scan_jobs._MEMORY["again"]["status"] != "running"
+    finally:
+        scan_jobs._MEMORY.clear()
+        scan_jobs._LISTS.clear()
+
+
 def test_scan_returns_before_the_gateway_timeout(monkeypatch):
     import kite_app.signals as signals
 
