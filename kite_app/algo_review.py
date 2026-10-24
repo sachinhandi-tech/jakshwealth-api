@@ -10,7 +10,8 @@ from kite_app.market_research import lookup_text
 
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_VERSION = "2023-06-01"
-DEFAULT_MODEL = "claude-sonnet-4-5"
+XAI_URL = "https://api.x.ai/v1/responses"
+DEFAULT_MODEL = "grok-4.7"
 _CHECKS = ("trend", "participation", "volatility", "asymmetry", "invalidation")
 _TOOL_NAMES = ("read_filings", "read_news", "read_lawsuits")
 _TOOLS = [
@@ -55,9 +56,12 @@ _INSTRUCTION = (
 
 def review_setups(setups: list[dict], ask=None) -> list[dict]:
     """Stamp each setup. No key, a bad answer, or a call the book rejects is not a trade."""
+    from kite_app.models import load_platform_config
+
+    load_platform_config()
     key = os.environ.get("LLM_API_KEY", "").strip()
     model = os.environ.get("LLM_MODEL", "").strip() or DEFAULT_MODEL
-    caller = ask or _ask_claude
+    caller = ask or _ask_model
     for item in setups:
         if not key:
             _stamp(item, "unavailable", "The model key is not in Secrets Manager, so this name is not approved.")
@@ -101,6 +105,86 @@ def _facts(item: dict) -> dict:
     }
 
 
+def _ask_model(key: str, model: str, facts: dict) -> tuple:
+    if model.lower().startswith("grok"):
+        return _ask_grok(key, model, facts)
+    return _ask_claude(key, model, facts)
+
+
+def _ask_grok(key: str, model: str, facts: dict) -> tuple:
+    """Read filings, news, and lawsuits through the xAI responses API. The key stays in the header."""
+    tools = [
+        {
+            "type": "function",
+            "name": name,
+            "description": "Read this symbol from the connected source. Use only the text that comes back.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "symbol": {"type": "string"},
+                    "exchange": {"type": "string"},
+                    "company_name": {"type": "string"},
+                },
+                "required": ["symbol"],
+            },
+        }
+        for name in _TOOL_NAMES
+    ]
+    body = {
+        "model": model,
+        "input": [{"role": "user", "content": _INSTRUCTION + "\n" + json.dumps(facts, sort_keys=True)}],
+        "temperature": 0,
+        "max_output_tokens": 1200,
+        "tools": tools,
+        "search_parameters": {"mode": "off"},
+    }
+    sources = []
+    for _ in range(4):
+        payload = _post_json(XAI_URL, {"authorization": f"Bearer {key}"}, body)
+        output = payload.get("output") or []
+        calls = [item for item in output if isinstance(item, dict) and item.get("type") == "function_call"]
+        if not calls:
+            decision, reason, checks = _parse_decision(_xai_text(output))
+            return decision, reason, checks, sources
+        results = []
+        for call in calls:
+            observed = _read_source(str(call.get("name") or ""), facts)
+            sources.append(observed)
+            results.append({
+                "type": "function_call_output",
+                "call_id": call.get("call_id"),
+                "output": observed["text"],
+            })
+        body = {
+            "model": model,
+            "previous_response_id": payload.get("id"),
+            "input": results,
+            "temperature": 0,
+            "max_output_tokens": 1200,
+            "tools": tools,
+            "search_parameters": {"mode": "off"},
+        }
+    raise RuntimeError("research tools did not finish")
+
+
+def _xai_text(output) -> str:
+    parts = []
+    for item in output:
+        if not isinstance(item, dict) or item.get("type") != "message":
+            continue
+        content = item.get("content")
+        if isinstance(content, str):
+            parts.append(content)
+            continue
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict):
+                    parts.append(str(part.get("text") or ""))
+                elif isinstance(part, str):
+                    parts.append(part)
+    return "".join(parts)
+
+
 def _ask_claude(key: str, model: str, facts: dict) -> tuple:
     messages = [{
         "role": "user",
@@ -134,21 +218,24 @@ def _ask_claude(key: str, model: str, facts: dict) -> tuple:
 
 
 def _post_messages(key: str, model: str, messages: list) -> dict:
-    body = json.dumps({
-        "model": model,
-        "max_tokens": 1200,
-        "temperature": 0,
-        "tools": _TOOLS,
-        "messages": messages,
-    }).encode("utf-8")
-    request = urllib.request.Request(
+    return _post_json(
         ANTHROPIC_URL,
-        data=body,
-        headers={
-            "content-type": "application/json",
-            "x-api-key": key,
-            "anthropic-version": ANTHROPIC_VERSION,
+        {"x-api-key": key, "anthropic-version": ANTHROPIC_VERSION},
+        {
+            "model": model,
+            "max_tokens": 1200,
+            "temperature": 0,
+            "tools": _TOOLS,
+            "messages": messages,
         },
+    )
+
+
+def _post_json(url: str, headers: dict, payload: dict) -> dict:
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"content-type": "application/json", **headers},
         method="POST",
     )
     with urllib.request.urlopen(request, timeout=30) as response:

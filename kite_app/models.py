@@ -70,7 +70,8 @@ def load_platform_config() -> None:
     try:
         import boto3
 
-        raw = boto3.client("secretsmanager").get_secret_value(SecretId=secret_id)["SecretString"]
+        region = os.environ.get("AWS_REGION", "").strip() or os.environ.get("AWS_DEFAULT_REGION", "").strip() or "ap-south-2"
+        raw = boto3.client("secretsmanager", region_name=region).get_secret_value(SecretId=secret_id)["SecretString"]
     except Exception:
         return
     payload = json.loads(raw)

@@ -258,6 +258,98 @@ def test_unread_filings_news_and_lawsuits_block_the_call(monkeypatch):
     assert "not all read" in setup["ai_reason"]
 
 
+def test_final_list_loads_the_model_key_before_it_refuses(monkeypatch):
+    from kite_app.algo_review import review_setups
+
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_MODEL", raising=False)
+
+    def load():
+        monkeypatch.setenv("LLM_API_KEY", "loaded-key")
+        monkeypatch.setenv("LLM_MODEL", "grok-4.7")
+
+    monkeypatch.setattr("kite_app.models.load_platform_config", load)
+    seen = {}
+
+    def ask(key, model, _facts):
+        seen["key"] = key
+        seen["model"] = model
+        return "stand_aside", "Entry is 100 and the volume multiple is 3.", _checks()
+
+    setup = {"symbol": "INFY", "reason": "Book.", "gtt_tradable": False, "desk": {"book_call": "stand_aside"}}
+    review_setups([setup], ask=ask)
+    assert seen == {"key": "loaded-key", "model": "grok-4.7"}
+    assert setup["ai_decision"] == "stand_aside"
+
+
+def test_grok_model_posts_to_xai_and_returns_only_the_tool_text(monkeypatch):
+    import json
+    from kite_app import algo_review
+
+    calls = []
+
+    class Response:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps(self.payload).encode("utf-8")
+
+    def fake_urlopen(request, timeout=30):
+        body = json.loads(request.data.decode("utf-8"))
+        calls.append((request.full_url, dict(request.header_items()), body))
+        if len(calls) == 1:
+            return Response({
+                "id": "resp_1",
+                "output": [
+                    {"type": "function_call", "name": "read_filings", "call_id": "call_1", "arguments": "{}"},
+                    {"type": "function_call", "name": "read_news", "call_id": "call_2", "arguments": "{}"},
+                    {"type": "function_call", "name": "read_lawsuits", "call_id": "call_3", "arguments": "{}"},
+                ],
+            })
+        return Response({
+            "id": "resp_2",
+            "output": [{
+                "type": "message",
+                "content": [{
+                    "type": "output_text",
+                    "text": json.dumps({
+                        "decision": "stand_aside",
+                        "reason": "The filing names the company and the last close is 101.",
+                        "checks": _checks(),
+                    }),
+                }],
+            }],
+        })
+
+    monkeypatch.setattr(algo_review.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(algo_review, "lookup_text", lambda *_args, **_kwargs: "Annual filing text")
+    decision, reason, checks, sources = algo_review._ask_grok(
+        "grok-test",
+        "grok-4.7",
+        {"symbol": "INFY", "company_name": "Infosys"},
+    )
+    assert decision == "stand_aside"
+    assert "101" in reason
+    assert checks["trend"] == "pass"
+    assert [item["name"] for item in sources] == ["read_filings", "read_news", "read_lawsuits"]
+    assert calls[0][0] == "https://api.x.ai/v1/responses"
+    assert calls[0][1]["Authorization"] == "Bearer grok-test"
+    assert "x-api-key" not in {name.lower() for name in calls[0][1]}
+    assert calls[0][2]["model"] == "grok-4.7"
+    assert calls[0][2]["search_parameters"] == {"mode": "off"}
+    assert calls[0][2]["tools"][0]["name"] == "read_filings"
+    assert calls[1][2]["previous_response_id"] == "resp_1"
+    assert calls[1][2]["input"][0]["output"] == "Annual filing text"
+    assert "anthropic.com" not in calls[0][0]
+
+
 def test_arm_exit_waits_until_the_buy_is_held():
     client = _kite()
     rows = arm_exit(client, [{"symbol": "INFY", "last_price": 101, "stoploss": 90, "target": 120}], True)
