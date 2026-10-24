@@ -8,8 +8,9 @@ def test_final_list_returns_before_the_model_runs():
     )
 
     assert result["working"] is True
+    assert result["paused"] is False
     assert "secret-token" not in str(result)
-    assert any("NSE" in line["text"] for line in result["activity"])
+    assert any("equities" in line["text"] for line in result["activity"])
 
 
 def test_saved_names_reach_the_model_away_from_the_request(monkeypatch):
@@ -47,3 +48,30 @@ def test_saved_names_reach_the_model_away_from_the_request(monkeypatch):
     assert snapshot["setups"][0]["ai_decision"] == "buy"
     assert snapshot["setups"][0]["symbol"] == "INFY"
     assert any("INFY" in line["text"] for line in snapshot["activity"])
+
+
+def test_stop_holds_the_scan_until_continue(monkeypatch):
+    from kite_app.desk_progress import resume_scan
+
+    started = []
+    monkeypatch.setattr(final_list, "_launch", lambda record: started.append(record["api_key"]))
+    resume_scan()
+    try:
+        stopped = final_list.stop_scan()
+        assert stopped["paused"] is True
+        assert stopped["working"] is False
+        assert "Scan stopped" in stopped["activity"][-1]["text"]
+
+        again = final_list.begin_final_list(
+            {"api_key": "key", "access_token": "secret-token"},
+        )
+        assert again["paused"] is True
+        assert again["working"] is False
+        assert started == []
+        assert "secret-token" not in str(again)
+
+        resumed = final_list.continue_scan({"api_key": "key", "access_token": "secret-token"})
+        assert resumed["paused"] is False
+        assert started == ["key"]
+    finally:
+        resume_scan()

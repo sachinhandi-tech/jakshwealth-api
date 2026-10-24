@@ -451,6 +451,26 @@ def algo_setups(body: SetupRequest) -> dict:
     return begin_final_list(record)
 
 
+@app.post("/api/kite/algo/scan/stop")
+def algo_scan_stop() -> dict:
+    """Pause the final-list read without dropping names already saved."""
+    from kite_app.final_list import stop_scan
+
+    return stop_scan()
+
+
+@app.post("/api/kite/algo/scan/continue")
+def algo_scan_continue() -> dict:
+    """Resume the final-list read from the names already saved."""
+    from kite_app.final_list import continue_scan
+
+    try:
+        record = service.saved_session()
+    except Exception:
+        record = None
+    return continue_scan(record)
+
+
 @app.post("/api/algo-orders/arm-exit")
 def algo_arm_exit(body: ExitGttRequest) -> dict:
     try:

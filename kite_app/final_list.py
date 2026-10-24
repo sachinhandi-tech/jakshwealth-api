@@ -26,15 +26,44 @@ _PASS_LIMIT = 80
 _SLICE = 250
 
 
+_STOP_NOTE = "Scan stopped. Saved names stay on the lists."
+
+
 def begin_final_list(record: Optional[dict], launch: bool = True) -> dict:
     """Start the equity read if needed and return the lines the desk can show now."""
+    from kite_app.desk_progress import scan_paused
+
     if not record or not record.get("api_key") or not record.get("access_token"):
         _set_working(False, "Log in to Zerodha to read equities, stock futures, stock options, and commodity futures.")
+        return public_snapshot()
+    if scan_paused():
+        _set_working(False, _FOCUS or _STOP_NOTE)
         return public_snapshot()
     if launch:
         _launch(record)
     else:
         _set_working(True, _FOCUS or "Reading equities, stock futures, stock options, and commodity futures.")
+    return public_snapshot()
+
+
+def stop_scan() -> dict:
+    """Pause the read. Opening the page again does not start it."""
+    from kite_app.desk_progress import pause_scan
+
+    pause_scan()
+    _set_working(False, _STOP_NOTE)
+    return public_snapshot()
+
+
+def continue_scan(record: Optional[dict]) -> dict:
+    """Resume the read from the names already saved."""
+    from kite_app.desk_progress import resume_scan
+
+    if not record or not record.get("api_key") or not record.get("access_token"):
+        _set_working(False, "Log in to Zerodha to read equities, stock futures, stock options, and commodity futures.")
+        return public_snapshot()
+    resume_scan()
+    _launch(record)
     return public_snapshot()
 
 
@@ -46,6 +75,7 @@ def public_snapshot() -> dict:
             "setups": [dict(item) for item in _BOOK["setups"]],
             "sell_calls": [dict(item) for item in _BOOK["sell_calls"]],
             "working": _WORKING,
+            "paused": _paused(),
         }
         focus = _FOCUS
     lines = _progress_lines()
@@ -175,6 +205,8 @@ def _launch(record: dict) -> None:
 
 def handle_message(body: dict) -> None:
     """Run one queued batch. The caller deletes the message only after this returns."""
+    if _paused():
+        return
     kind = str(body.get("kind") or "")
     if kind == "equity_pass":
         _handle_pass(body)
@@ -322,6 +354,12 @@ async def serve_queue(stop) -> None:
     from kite_app.equity_queue import delete_batch, extend_visibility, receive_batch
 
     while not stop.is_set():
+        if _paused():
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=15)
+            except asyncio.TimeoutError:
+                continue
+            return
         try:
             messages = await asyncio.to_thread(receive_batch)
         except Exception:
@@ -354,6 +392,9 @@ def _loop() -> None:
     started = time.monotonic()
     try:
         while time.monotonic() - started < 45 * 60:
+            if _paused():
+                _set_working(False, _STOP_NOTE)
+                return
             record = _current_record()
             try:
                 from kite_app.scan_jobs import ensure_listed_equity_scan, equity_work_pending
@@ -382,6 +423,12 @@ def _loop() -> None:
 def _current_record() -> Optional[dict]:
     with _LOCK:
         return _RECORD
+
+
+def _paused() -> bool:
+    from kite_app.desk_progress import scan_paused
+
+    return scan_paused()
 
 
 def _set_working(working: bool, focus: str) -> None:

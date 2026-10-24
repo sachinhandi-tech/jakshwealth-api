@@ -53,6 +53,10 @@ _BOOKS = (
 
 def ensure_listed_equity_scan(record: Optional[dict]) -> str:
     """Start the next unread book. One book runs at a time so Zerodha is not flooded."""
+    from kite_app.desk_progress import scan_paused
+
+    if scan_paused():
+        return ""
     if not record or not record.get("api_key") or not record.get("access_token"):
         return ""
     try:
@@ -168,6 +172,10 @@ def _start_cache_fill(record: dict) -> None:
             kite = KiteConnect(api_key=record["api_key"])
             kite.set_access_token(record["access_token"])
             for _ in range(40):
+                from kite_app.desk_progress import scan_paused
+
+                if scan_paused():
+                    return
                 payload = build_scanner_payload(kite, budget_seconds=45)
                 if (payload.get("metadata") or {}).get("complete") is True:
                     return

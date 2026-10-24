@@ -171,10 +171,13 @@ def scan_nifty100_parallel_cached(
         from kite_app.desk_progress import note_scan
 
         note_scan(progress_key, 0, universe_count, 0, True)
-        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-            futures = {}
+        from kite_app.desk_progress import scan_paused
+
+        executor = ThreadPoolExecutor(max_workers=MAX_WORKERS)
+        futures = {}
+        try:
             for constituent in queued:
-                if time.monotonic() > deadline:
+                if time.monotonic() > deadline or scan_paused():
                     break
                 future = executor.submit(
                     _scan_stock_cached,
@@ -193,8 +196,8 @@ def scan_nifty100_parallel_cached(
                 )
                 futures[future] = constituent["ticker"]
 
-            for future in as_completed(futures):
-                if time.monotonic() > deadline:
+            for future in as_completed(list(futures)):
+                if time.monotonic() > deadline or scan_paused():
                     break
                 found, status = future.result()
                 scanned += 1
@@ -205,9 +208,9 @@ def scan_nifty100_parallel_cached(
                     found["instrument_type"] = source.get("instrument_type") or "EQ"
                     found["book"] = source.get("book") or book or "equity"
                     signals.append(found)
-                from kite_app.desk_progress import note_scan
-
                 note_scan(progress_key, scanned, universe_count, len(signals), True)
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
 
         signals.sort(key=lambda row: (row["crossover_date"], row["ticker"]), reverse=True)
         for rank, signal in enumerate(signals, start=1):
