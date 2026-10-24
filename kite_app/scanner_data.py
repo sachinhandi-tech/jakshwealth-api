@@ -130,12 +130,19 @@ def build_scanner_payload(kite, budget_seconds: Optional[float] = None) -> dict:
                 saved[symbol] = stock
     recorded_all = bool(constituents) and all(row["ticker"] in saved for row in constituents)
     if recorded_all and within_ttl:
+        from kite_app.desk_progress import note_fill
+
+        note_fill(len(constituents), len(constituents), False)
         return _public_payload(constituents, saved)
     if recorded_all and not within_ttl:
         saved = {}
 
+    from kite_app.desk_progress import note_fill
+
     nifty100 = _nifty_tickers(load_nifty100)
     nifty50 = load_nifty50_symbols()
+    filled = sum(1 for row in constituents if (saved.get(row["ticker"]) or {}).get("candles"))
+    note_fill(filled, len(constituents), True)
     deadline = time.monotonic() + budget_seconds
     end = datetime.now()
     start = end - timedelta(days=HISTORY_DAYS)
@@ -163,6 +170,8 @@ def build_scanner_payload(kite, budget_seconds: Optional[float] = None) -> dict:
             continue
         candles = [_candle_row(item) for item in raw_candles]
         candles = [item for item in candles if item is not None]
+        filled += 1
+        note_fill(filled, len(constituents), True)
         saved[symbol] = {
             "symbol": symbol,
             "company_name": constituent["company"],

@@ -37,6 +37,16 @@ def _retest_stock(symbol="INFY", exchange="NSE", instrument_type="EQ"):
     }
 
 
+def test_screen_without_review_does_not_call_the_model(monkeypatch):
+    def fail(setups, ask=None):
+        raise AssertionError(setups)
+
+    monkeypatch.setattr("kite_app.algo_review.review_setups", fail)
+    book = select_setups([_retest_stock()], review=False)
+    assert book["accepted"] == 1
+    assert "ai_decision" not in book["setups"][0]
+
+
 def test_equity_retest_is_ranked_with_a_2r_target():
     result = select_setups([_retest_stock(), _retest_stock("QUIET")])
     assert result["scanned"] == 2

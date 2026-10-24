@@ -118,6 +118,9 @@ def scan_nifty100_parallel_cached(
     """Scan the chosen universe and keep only crosses inside the lookback."""
     start_time = time.monotonic()
     deadline = start_time + (SCAN_BUDGET_SECONDS if budget_seconds is None else budget_seconds)
+    universe_count = 0
+    scanned = 0
+    signals: list[dict] = []
 
     db = get_sessionmaker()()
     try:
@@ -151,6 +154,9 @@ def scan_nifty100_parallel_cached(
 
         signals = []
         scanned = 0
+        from kite_app.desk_progress import note_scan
+
+        note_scan(scan_mode, 0, universe_count, 0, True)
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
             futures = {}
             for constituent in queued:
@@ -182,6 +188,9 @@ def scan_nifty100_parallel_cached(
                     skipped += 1
                 elif found:
                     signals.append(found)
+                from kite_app.desk_progress import note_scan
+
+                note_scan(scan_mode, scanned, universe_count, len(signals), True)
 
         signals.sort(key=lambda row: (row["crossover_date"], row["ticker"]), reverse=True)
         for rank, signal in enumerate(signals, start=1):
@@ -219,4 +228,10 @@ def scan_nifty100_parallel_cached(
     except Exception as exc:
         raise SignalScanError("The scan could not be completed.") from exc
     finally:
+        try:
+            from kite_app.desk_progress import note_scan
+
+            note_scan(scan_mode, scanned, universe_count, len(signals), False)
+        except Exception:
+            pass
         db.close()

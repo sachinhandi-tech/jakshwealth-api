@@ -29,7 +29,7 @@ TOP_CANDIDATES = 5
 MAX_HOLD_DAYS = 20
 
 
-def select_setups(stocks: list[dict], limit: int = TOP_CANDIDATES) -> dict:
+def select_setups(stocks: list[dict], limit: int = TOP_CANDIDATES, review: bool = True) -> dict:
     """Return the top ranked setups and the rows that failed a real check."""
     accepted = []
     trapped = []
@@ -65,10 +65,11 @@ def select_setups(stocks: list[dict], limit: int = TOP_CANDIDATES) -> dict:
     for rank, item in enumerate(chosen, start=1):
         item["rank"] = rank
     sell_book = [item for item in trapped if item["desk"]["book_call"] == "sell"][:limit]
-    from kite_app.algo_review import review_setups
+    if review:
+        from kite_app.algo_review import review_setups
 
-    review_setups(chosen)
-    review_setups(sell_book)
+        review_setups(chosen)
+        review_setups(sell_book)
     sell_calls = [item for item in sell_book if item.get("ai_decision") == "sell"]
     seen = {item["symbol"] for item in sell_calls}
     for item in chosen:

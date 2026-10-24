@@ -67,7 +67,7 @@ def _json_ready(candles: list[dict]) -> list[dict]:
 
 
 def history_by_ticker(tickers: list[str]) -> list[dict]:
-    """Longest saved daily history for each ticker. A database miss returns nothing."""
+    """Longest saved daily history for each ticker. Redis is read before Postgres."""
     names = []
     seen = set()
     for ticker in tickers:
@@ -77,15 +77,24 @@ def history_by_ticker(tickers: list[str]) -> list[dict]:
             names.append(name)
     if not names:
         return []
+    best: dict[str, dict] = {}
+    missing = []
+    for name in names:
+        remembered = _remembered_history(name)
+        if remembered is None:
+            missing.append(name)
+        else:
+            best[name] = remembered
+    if not missing:
+        return list(best.values())
     try:
         from kite_app.models import get_sessionmaker
 
         db = get_sessionmaker()()
     except Exception:
-        return []
-    best: dict[str, dict] = {}
+        return list(best.values())
     try:
-        rows = db.query(StockHistoryCache).filter(StockHistoryCache.ticker.in_(names)).all()
+        rows = db.query(StockHistoryCache).filter(StockHistoryCache.ticker.in_(missing)).all()
         for row in rows:
             try:
                 candles = json.loads(row.candles_json)
@@ -95,14 +104,10 @@ def history_by_ticker(tickers: list[str]) -> list[dict]:
                 continue
             current = best.get(row.ticker)
             if current is None or len(candles) > len(current["candles"]):
-                best[row.ticker] = {
-                    "symbol": row.ticker,
-                    "company_name": row.ticker,
-                    "instrument_type": "EQ",
-                    "candles": candles,
-                }
+                best[row.ticker] = _history_row(row.ticker, candles)
+                _store_history(row.ticker, row.start_date, row.end_date, candles)
     except Exception:
-        return []
+        return list(best.values())
     finally:
         db.close()
     return list(best.values())
@@ -115,7 +120,10 @@ def get_cached_candles(
     start_date: date,
     end_date: date,
 ) -> Optional[list[dict]]:
-    """Get cached historical data if available and complete."""
+    """Get cached historical data if available and complete. Redis is checked before Postgres."""
+    remembered = _redis_candles(ticker, start_date, end_date)
+    if remembered is not None:
+        return remembered
     with _CACHE_LOCK:
         cache = db.query(StockHistoryCache).filter(
             StockHistoryCache.token == token,
@@ -125,9 +133,12 @@ def get_cached_candles(
 
     if cache:
         try:
-            return json.loads(cache.candles_json)
+            candles = json.loads(cache.candles_json)
         except json.JSONDecodeError:
             return None
+        if isinstance(candles, list) and candles:
+            _store_history(ticker, cache.start_date, cache.end_date, candles)
+            return candles
     return None
 
 
@@ -176,6 +187,59 @@ def cache_candles(
             db.add(cache)
 
     db.commit()
+    _store_history(ticker, cache.start_date, cache.end_date, candles)
+
+
+def _history_key(ticker: str) -> str:
+    return f"history:{str(ticker or '').upper()}"
+
+
+def _history_row(ticker: str, candles: list[dict]) -> dict:
+    return {
+        "symbol": ticker,
+        "company_name": ticker,
+        "instrument_type": "EQ",
+        "candles": candles,
+    }
+
+
+def _remembered_history(ticker: str) -> Optional[dict]:
+    from kite_app.desk_cache import cache_get
+
+    payload = cache_get(_history_key(ticker))
+    candles = payload.get("candles") if isinstance(payload, dict) else None
+    if not isinstance(candles, list) or not candles:
+        return None
+    return _history_row(str(ticker).upper(), candles)
+
+
+def _redis_candles(ticker: str, start_date: date, end_date: date) -> Optional[list[dict]]:
+    from kite_app.desk_cache import cache_get
+
+    payload = cache_get(_history_key(ticker))
+    if not isinstance(payload, dict):
+        return None
+    candles = payload.get("candles")
+    try:
+        cached_start = date.fromisoformat(str(payload.get("start") or ""))
+        cached_end = date.fromisoformat(str(payload.get("end") or ""))
+    except ValueError:
+        return None
+    if cached_start <= start_date and cached_end >= end_date and isinstance(candles, list) and candles:
+        return candles
+    return None
+
+
+def _store_history(ticker: str, start_date: date, end_date: date, candles: list[dict]) -> None:
+    from kite_app.desk_cache import cache_set
+
+    if not candles:
+        return
+    cache_set(_history_key(ticker), {
+        "start": start_date.isoformat(),
+        "end": end_date.isoformat(),
+        "candles": _json_ready(candles),
+    })
 
 
 def should_update_cache(cache: StockHistoryCache, days_old: int = 7) -> bool:

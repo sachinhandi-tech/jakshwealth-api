@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from contextlib import asynccontextmanager
 from typing import Literal, Optional, Union
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -15,7 +16,6 @@ from starlette.middleware.cors import CORSMiddleware
 from kiteconnect.exceptions import TokenException
 
 from kite_app.auth_router import router as zerodha_auth_router
-from kite_app.algo_layers import select_setups
 from kite_app.gtt_orders import GttRejected, arm_exit, gtt_state, live_gtt
 from kite_app.inbox import recent_signals, remember
 from kite_app.kite_service import KiteAuthError, KiteService
@@ -33,7 +33,25 @@ from kite_app.saas_whitelabel import router as whitelabel_router
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger("kite_app")
 
-app = FastAPI(title="JakshWealth Kite", version="1.0.0")
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    stop = asyncio.Event()
+    from kite_app.final_list import serve_queue
+
+    task = asyncio.create_task(serve_queue(stop))
+    try:
+        yield
+    finally:
+        stop.set()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+app = FastAPI(title="JakshWealth Kite", version="1.0.0", lifespan=_lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -422,40 +440,15 @@ def algo_gtt_state(body: GttStateRequest) -> dict:
 
 @app.post("/api/kite/algo/setups")
 def algo_setups(body: SetupRequest) -> dict:
-    from kite_app.algo_layers import combine_books
-    from kite_app.scanner_data import cached_equity
-    from kite_app.signals_cache import history_by_ticker
+    """Return the latest final list at once. Screening and the model keep running behind it."""
+    del body
+    from kite_app.final_list import begin_final_list
 
-    posted = []
-    for stock in body.stocks:
-        item = stock.model_dump()
-        item["candles"] = [candle.model_dump() for candle in stock.candles]
-        item["listed"] = True
-        posted.append(item)
-    from kite_app.scan_jobs import latest_crossover_signals
-
-    by_symbol = {}
-    for signal in [*latest_crossover_signals(), *[item.model_dump() for item in body.signals]]:
-        symbol = str(signal.get("symbol") or "").upper()
-        if not symbol:
-            continue
-        row = dict(signal)
-        row["symbol"] = symbol
-        by_symbol[symbol] = row
-    signals = list(by_symbol.values())
-    remembered = history_by_ticker([signal["symbol"] for signal in signals]) if signals else []
-    book = select_setups(combine_books(posted, signals, [*cached_equity(), *remembered]))
     try:
         record = service.saved_session()
     except Exception:
         record = None
-    if record:
-        from kite_app.scan_jobs import ensure_listed_equity_scan
-
-        note = ensure_listed_equity_scan(record)
-        if note:
-            book["universe_note"] = note
-    return book
+    return begin_final_list(record)
 
 
 @app.post("/api/algo-orders/arm-exit")

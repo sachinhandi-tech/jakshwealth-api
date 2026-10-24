@@ -1,4 +1,4 @@
-"""Hot copy of the lists the final call reads. Postgres remains the stored copy."""
+"""Hot copy in front of Postgres. A missing Redis URL leaves the database as the only read."""
 
 from __future__ import annotations
 

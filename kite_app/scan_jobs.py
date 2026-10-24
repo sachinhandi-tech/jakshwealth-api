@@ -97,6 +97,11 @@ def _is_equity_request(raw: Optional[str]) -> bool:
     return bool(params.get("scan_all_nse"))
 
 
+def equity_work_pending() -> bool:
+    """True while a full equity read or candle fill is still unfinished."""
+    return _FILLING or _equity_scan_active() or not _equity_scan_covers_universe()
+
+
 def _equity_scan_covers_universe() -> bool:
     saved = latest_crossover_scans()
     for kind in ("short", "long"):
@@ -131,6 +136,13 @@ def _start_cache_fill(record: dict) -> None:
             logger.info("equity candle fill stopped")
         finally:
             _FILLING = False
+            try:
+                from kite_app.desk_progress import fill_status, note_fill
+
+                current = fill_status()
+                note_fill(int(current.get("saved") or 0), int(current.get("universe") or 0), False)
+            except Exception:
+                pass
 
     threading.Thread(target=fill, args=(), daemon=True).start()
 
