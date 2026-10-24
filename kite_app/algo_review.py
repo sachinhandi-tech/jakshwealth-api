@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import urllib.error
 import urllib.request
 
 from kite_app.market_research import lookup_text
@@ -12,6 +14,11 @@ ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_VERSION = "2023-06-01"
 XAI_URL = "https://api.x.ai/v1/responses"
 DEFAULT_MODEL = "grok-4.7"
+_SECRET_TEXT = re.compile(r"(xai-|sk-)[A-Za-z0-9_-]+|Bearer\s+\S+")
+
+
+class ModelCallError(RuntimeError):
+    """A model call failed. The message is safe to show on the desk."""
 _CHECKS = ("trend", "participation", "volatility", "asymmetry", "invalidation")
 _TOOL_NAMES = ("read_filings", "read_news", "read_lawsuits")
 _TOOLS = [
@@ -68,8 +75,9 @@ def review_setups(setups: list[dict], ask=None) -> list[dict]:
             continue
         try:
             parsed, sources = _split(caller(key, model, _facts(item)))
-        except Exception:
-            _stamp(item, "unavailable", "The model did not answer, so this name is not approved.")
+        except Exception as exc:
+            detail = str(exc).strip() if isinstance(exc, ModelCallError) else type(exc).__name__
+            _stamp(item, "unavailable", f"The model did not answer ({detail}), so this name is not approved.")
             continue
         if parsed is None:
             _stamp(item, "unavailable", "The model answer could not be read, so this name is not approved.")
@@ -135,6 +143,7 @@ def _ask_grok(key: str, model: str, facts: dict) -> tuple:
         "input": [{"role": "user", "content": _INSTRUCTION + "\n" + json.dumps(facts, sort_keys=True)}],
         "temperature": 0,
         "max_output_tokens": 1200,
+        "store": True,
         "tools": tools,
         "search_parameters": {"mode": "off"},
     }
@@ -144,15 +153,19 @@ def _ask_grok(key: str, model: str, facts: dict) -> tuple:
         output = payload.get("output") or []
         calls = [item for item in output if isinstance(item, dict) and item.get("type") == "function_call"]
         if not calls:
-            decision, reason, checks = _parse_decision(_xai_text(output))
+            try:
+                decision, reason, checks = _parse_decision(_xai_text(output))
+            except json.JSONDecodeError:
+                return None, "", None, sources
             return decision, reason, checks, sources
         results = []
         for call in calls:
-            observed = _read_source(str(call.get("name") or ""), facts)
+            function = call.get("function") if isinstance(call.get("function"), dict) else {}
+            observed = _read_source(str(call.get("name") or function.get("name") or ""), facts)
             sources.append(observed)
             results.append({
                 "type": "function_call_output",
-                "call_id": call.get("call_id"),
+                "call_id": call.get("call_id") or call.get("id"),
                 "output": observed["text"],
             })
         body = {
@@ -161,16 +174,22 @@ def _ask_grok(key: str, model: str, facts: dict) -> tuple:
             "input": results,
             "temperature": 0,
             "max_output_tokens": 1200,
+            "store": True,
             "tools": tools,
             "search_parameters": {"mode": "off"},
         }
-    raise RuntimeError("research tools did not finish")
+    raise ModelCallError("research tools did not finish")
 
 
 def _xai_text(output) -> str:
     parts = []
     for item in output:
-        if not isinstance(item, dict) or item.get("type") != "message":
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") == "output_text":
+            parts.append(str(item.get("text") or ""))
+            continue
+        if item.get("type") != "message":
             continue
         content = item.get("content")
         if isinstance(content, str):
@@ -214,7 +233,7 @@ def _ask_claude(key: str, model: str, facts: dict) -> tuple:
                 "content": observed["text"],
             })
         messages.append({"role": "user", "content": results})
-    raise RuntimeError("research tools did not finish")
+    raise ModelCallError("research tools did not finish")
 
 
 def _post_messages(key: str, model: str, messages: list) -> dict:
@@ -238,8 +257,35 @@ def _post_json(url: str, headers: dict, payload: dict) -> dict:
         headers={"content-type": "application/json", **headers},
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=30) as response:
-        return json.loads(response.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(request, timeout=45) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        raise ModelCallError(_http_fault(exc)) from None
+    except urllib.error.URLError as exc:
+        reason = str(getattr(exc, "reason", "") or "")
+        if "timed out" in reason.lower():
+            raise ModelCallError("timed out") from None
+        raise ModelCallError(type(exc.reason).__name__ if exc.reason is not None else "URLError") from None
+    except TimeoutError:
+        raise ModelCallError("timed out") from None
+
+
+def _http_fault(exc: urllib.error.HTTPError) -> str:
+    message = ""
+    try:
+        body = json.loads(exc.read().decode("utf-8", "replace"))
+        error = body.get("error") if isinstance(body, dict) else None
+        if isinstance(error, dict):
+            message = str(error.get("message") or error.get("code") or "")
+        elif isinstance(error, str):
+            message = error
+    except Exception:
+        message = ""
+    message = _SECRET_TEXT.sub("[key]", message).strip()[:160]
+    if message:
+        return f"HTTP {exc.code} {message}"
+    return f"HTTP {exc.code}"
 
 
 def _read_source(name: str, facts: dict, get=None) -> dict:
@@ -279,8 +325,41 @@ def _parse_decision(text: str) -> tuple:
     cleaned = text.strip()
     if cleaned.startswith("```"):
         cleaned = cleaned.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-    parsed = json.loads(cleaned)
+    try:
+        parsed = json.loads(cleaned)
+    except json.JSONDecodeError:
+        parsed = _json_object(cleaned)
+    if not isinstance(parsed, dict):
+        raise json.JSONDecodeError("no object", cleaned, 0)
     return parsed.get("decision"), parsed.get("reason"), parsed.get("checks")
+
+
+def _json_object(text: str) -> dict:
+    start = text.find("{")
+    if start < 0:
+        raise json.JSONDecodeError("no object", text, 0)
+    depth = 0
+    in_string = False
+    escape = False
+    for index in range(start, len(text)):
+        char = text[index]
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return json.loads(text[start:index + 1])
+    raise json.JSONDecodeError("no object", text, start)
 
 
 def _unpack(result) -> tuple[str, str, dict] | None:

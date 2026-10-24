@@ -348,6 +348,59 @@ def test_grok_model_posts_to_xai_and_returns_only_the_tool_text(monkeypatch):
     assert calls[1][2]["previous_response_id"] == "resp_1"
     assert calls[1][2]["input"][0]["output"] == "Annual filing text"
     assert "anthropic.com" not in calls[0][0]
+    assert calls[0][2]["store"] is True
+
+
+def test_grok_reads_json_wrapped_in_other_text(monkeypatch):
+    import json
+    from kite_app import algo_review
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            answer = {
+                "decision": "stand_aside",
+                "reason": "The last close is 101 and volume is 3 times.",
+                "checks": _checks(),
+            }
+            return json.dumps({
+                "id": "resp_1",
+                "output": [{
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": "Final call:\n```json\n" + json.dumps(answer) + "\n```"}],
+                }],
+            }).encode("utf-8")
+
+    monkeypatch.setattr(algo_review.urllib.request, "urlopen", lambda *_args, **_kwargs: Response())
+    decision, reason, checks, _sources = algo_review._ask_grok("grok-test", "grok-4.7", {"symbol": "INFY"})
+    assert decision == "stand_aside"
+    assert "101" in reason
+    assert checks["trend"] == "pass"
+
+
+def test_model_http_failure_names_the_status_and_hides_the_key(monkeypatch):
+    import io
+    import urllib.error
+    from kite_app.algo_review import review_setups
+
+    def fail(_request, timeout=45):
+        body = b'{"error":{"message":"Incorrect API key xai-secretvalue"}}'
+        raise urllib.error.HTTPError("https://api.x.ai/v1/responses", 401, "Unauthorized", {}, io.BytesIO(body))
+
+    monkeypatch.setattr("urllib.request.urlopen", fail)
+    monkeypatch.setenv("LLM_API_KEY", "xai-secretvalue")
+    monkeypatch.setenv("LLM_MODEL", "grok-4.7")
+    setup = {"symbol": "INFY", "reason": "Book.", "gtt_tradable": False, "desk": {"book_call": "stand_aside"}}
+    review_setups([setup])
+    assert "HTTP 401" in setup["ai_reason"]
+    assert "Incorrect API key" in setup["ai_reason"]
+    assert "xai-secretvalue" not in setup["ai_reason"]
+    assert setup["gtt_tradable"] is False
 
 
 def test_arm_exit_waits_until_the_buy_is_held():
