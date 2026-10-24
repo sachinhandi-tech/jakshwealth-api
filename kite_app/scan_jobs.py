@@ -153,8 +153,8 @@ def _scan_is_live(book: str) -> bool:
 
 
 def _release_stale_run(book: str) -> bool:
-    """A database row can stay 'running' after the thread is gone. Release it so a new read can start."""
-    cutoff = datetime.now(timezone.utc) - timedelta(seconds=120)
+    """Release a pass whose thread is gone. A live NSE read takes longer than a few minutes, so a young row is left alone."""
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=1800)
     if not _use_database():
         stale = [
             job_id for job_id, row in _MEMORY.items()
