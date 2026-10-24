@@ -54,7 +54,11 @@ def test_equity_retest_is_ranked_with_a_2r_target():
     assert setup["quantity"] == 1000
     assert setup["budget_inr"] == 100000
     assert "one lakh" in setup["reason"]
-    assert setup["screens"]["price_volume"] is True
+    assert setup["screens"] == {
+        "moving_average": True,
+        "price_volume": True,
+        "rsi_momentum_atr": True,
+    }
 
 
 def test_moving_average_names_join_the_book_without_a_volume_breakout():
@@ -69,6 +73,10 @@ def test_moving_average_names_join_the_book_without_a_volume_breakout():
     assert "moving-average crossover list" in found["reason"]
     assert "RSI" in found["reason"]
     assert "ATR" in found["reason"]
+    book = select_setups([stock])
+    assert book["setups"] == []
+    assert "price and volume expansion" in book["rejected"][0]["reason"]
+    assert "not sent to the model" in book["rejected"][0]["reason"]
 
     flat = {
         "symbol": "FLAT",

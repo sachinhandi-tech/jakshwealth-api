@@ -21,6 +21,21 @@ from kite_app.signals_parallel_cached import scan_nifty100_parallel_cached
 logger = logging.getLogger("kite_app.scan")
 ASYNC_SCAN_BUDGET_SECONDS = 600
 _MEMORY: dict[str, dict] = {}
+_LISTS: dict[str, dict] = {}
+_PUBLIC_FIELDS = (
+    "scan_mode",
+    "ma_type",
+    "short_type",
+    "long_type",
+    "trend_window",
+    "short_window",
+    "long_window",
+    "lookback_days",
+    "universe",
+    "scanned",
+    "skipped",
+    "signals",
+)
 
 
 def enqueue_scan(record: dict, params: dict) -> str:
@@ -39,6 +54,79 @@ def enqueue_scan(record: dict, params: dict) -> str:
     _save_new(job_id, params, blob)
     _start(job_id)
     return job_id
+
+
+def latest_crossover_scans() -> dict:
+    """Newest finished short and long moving-average scans. Credentials stay out."""
+    found: dict[str, Optional[dict]] = {"short": _cached_list("short"), "long": _cached_list("long")}
+    if found["short"] is not None and found["long"] is not None:
+        return found
+    stored = _stored_lists()
+    for kind in ("short", "long"):
+        if found[kind] is None and stored.get(kind):
+            found[kind] = stored[kind]
+            _remember_cache(kind, stored[kind])
+    if found["short"] is not None and found["long"] is not None:
+        return found
+    try:
+        rows = _done_scans()
+    except Exception:
+        logger.info("saved crossover scans could not be read")
+        return found
+    for row in rows:
+        try:
+            params = json.loads(row["request_json"])
+            result = json.loads(row["result_json"])
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if not isinstance(result, dict):
+            continue
+        kind = _horizon(str(params.get("scan_mode") or result.get("scan_mode") or ""))
+        if found[kind] is None:
+            public = _public_result(result)
+            found[kind] = public
+            save_crossover_list(kind, public)
+        if found["short"] is not None and found["long"] is not None:
+            break
+    return found
+
+
+def save_crossover_list(scan_mode: str, result: dict) -> None:
+    """Store one horizon for the final call. A cache miss still leaves the database row."""
+    if not isinstance(result, dict):
+        return
+    kind = scan_mode if scan_mode in {"short", "long"} else _horizon(scan_mode or str(result.get("scan_mode") or ""))
+    public = _public_result(result)
+    public["scan_mode"] = "price" if kind == "long" else public.get("scan_mode") or "crossover"
+    try:
+        _write_list(kind, public)
+    except Exception:
+        logger.info("crossover list was not stored")
+        return
+    _remember_cache(kind, public)
+
+
+def latest_crossover_signals() -> list[dict]:
+    """Symbols from the saved scans. The browser does not have to still be open."""
+    rows = []
+    seen = set()
+    saved = latest_crossover_scans()
+    for result in (saved["short"], saved["long"]):
+        if not result:
+            continue
+        for signal in result.get("signals") or []:
+            if not isinstance(signal, dict):
+                continue
+            symbol = str(signal.get("ticker") or signal.get("symbol") or "").upper()
+            if not symbol or symbol in seen:
+                continue
+            seen.add(symbol)
+            rows.append({
+                "symbol": symbol,
+                "company_name": signal.get("company") or signal.get("company_name") or symbol,
+                "crossover_type": signal.get("crossover_type") or "",
+            })
+    return rows
 
 
 def read_scan(job_id: str) -> Optional[dict]:
@@ -77,6 +165,7 @@ def run_scan_job(job_id: str) -> None:
         
         result = scan_nifty100_parallel_cached(kite, budget_seconds=budget, **params)
         _finish(job_id, "done", json.dumps(result), None)
+        save_crossover_list(str(params.get("scan_mode") or result.get("scan_mode") or ""), result)
         
         logger.info(
             "Scan completed: %s stocks in %.1fs (cache: %s)",
@@ -145,6 +234,102 @@ def _save_new(job_id: str, params: dict, blob: str) -> None:
             )
         )
         db.commit()
+    finally:
+        db.close()
+
+
+def _horizon(scan_mode: str) -> str:
+    return "long" if scan_mode == "price" else "short"
+
+
+def _public_result(result: dict) -> dict:
+    public = {key: result.get(key) for key in _PUBLIC_FIELDS}
+    signals = public.get("signals") if isinstance(public.get("signals"), list) else []
+    public["signals"] = [signal for signal in signals if isinstance(signal, dict)]
+    return public
+
+
+def _cached_list(kind: str) -> Optional[dict]:
+    from kite_app.desk_cache import cache_get
+
+    payload = cache_get(f"crossover:{kind}")
+    result = payload.get("result") if isinstance(payload, dict) else None
+    return result if isinstance(result, dict) else None
+
+
+def _remember_cache(kind: str, result: dict) -> None:
+    from kite_app.desk_cache import cache_set
+
+    cache_set(f"crossover:{kind}", {"result": result})
+
+
+def _stored_lists() -> dict[str, Optional[dict]]:
+    found: dict[str, Optional[dict]] = {"short": None, "long": None}
+    if not _use_database():
+        for kind, result in _LISTS.items():
+            if kind in found and isinstance(result, dict):
+                found[kind] = result
+        return found
+    from kite_app.models import SavedCrossoverList, get_sessionmaker
+
+    db = get_sessionmaker()()
+    try:
+        for row in db.query(SavedCrossoverList).all():
+            if row.horizon not in found or not row.result_json:
+                continue
+            try:
+                result = json.loads(row.result_json)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(result, dict):
+                found[row.horizon] = result
+    finally:
+        db.close()
+    return found
+
+
+def _write_list(kind: str, result: dict) -> None:
+    if not _use_database():
+        _LISTS[kind] = result
+        return
+    from kite_app.models import SavedCrossoverList, get_sessionmaker
+
+    db = get_sessionmaker()()
+    try:
+        row = db.get(SavedCrossoverList, kind)
+        payload = json.dumps(result)
+        now = datetime.now(timezone.utc)
+        if row is None:
+            db.add(SavedCrossoverList(horizon=kind, saved_at=now, result_json=payload))
+        else:
+            row.saved_at = now
+            row.result_json = payload
+        db.commit()
+    finally:
+        db.close()
+
+
+def _done_scans() -> list[dict]:
+    """Finished scans, newest first. The credential blob is not copied."""
+    if not _use_database():
+        rows = []
+        for row in reversed(list(_MEMORY.values())):
+            if row.get("status") == "done" and row.get("result_json"):
+                rows.append({
+                    "request_json": row["request_json"],
+                    "result_json": row["result_json"],
+                })
+        return rows
+    db = get_sessionmaker()()
+    try:
+        jobs = (
+            db.query(SignalScanJob)
+            .filter(SignalScanJob.status == "done", SignalScanJob.result_json.isnot(None))
+            .order_by(SignalScanJob.created_at.desc())
+            .limit(40)
+            .all()
+        )
+        return [{"request_json": job.request_json, "result_json": job.result_json} for job in jobs]
     finally:
         db.close()
 

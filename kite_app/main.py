@@ -301,6 +301,13 @@ def signals(body: SignalRequest) -> JSONResponse:
     return JSONResponse(status_code=202, content={"job_id": job_id, "status": "running"})
 
 
+@app.get("/api/kite/signals/latest")
+def latest_signals() -> dict:
+    from kite_app.scan_jobs import latest_crossover_scans
+
+    return latest_crossover_scans()
+
+
 @app.get("/api/kite/signals/{job_id}")
 def signal_job(job_id: str) -> dict:
     job = read_scan(job_id)
@@ -425,8 +432,18 @@ def algo_setups(body: SetupRequest) -> dict:
         item["candles"] = [candle.model_dump() for candle in stock.candles]
         item["listed"] = True
         posted.append(item)
-    signals = [signal.model_dump() for signal in body.signals]
-    remembered = history_by_ticker([signal.symbol for signal in body.signals]) if signals else []
+    from kite_app.scan_jobs import latest_crossover_signals
+
+    by_symbol = {}
+    for signal in [*latest_crossover_signals(), *[item.model_dump() for item in body.signals]]:
+        symbol = str(signal.get("symbol") or "").upper()
+        if not symbol:
+            continue
+        row = dict(signal)
+        row["symbol"] = symbol
+        by_symbol[symbol] = row
+    signals = list(by_symbol.values())
+    remembered = history_by_ticker([signal["symbol"] for signal in signals]) if signals else []
     return select_setups(combine_books(posted, signals, [*cached_equity(), *remembered]))
 
 

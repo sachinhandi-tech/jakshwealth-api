@@ -1,9 +1,9 @@
 """Combined book for the final call.
 
-A name is read when it is on the moving-average crossover list, the price
-and volume expansion list, or the RSI momentum and ATR list. The model
-sees that combined book. Sector membership is not on this feed. Filings,
-news, and lawsuits come only from the research tools.
+A name is sent to the model only when the backend has already passed it on
+all three screens: the moving-average crossover list, the price and volume
+expansion list, and the RSI momentum and ATR screen. Sector membership is
+not on this feed. Filings, news, and lawsuits come only from the research tools.
 """
 
 from __future__ import annotations
@@ -40,10 +40,16 @@ def select_setups(stocks: list[dict], limit: int = TOP_CANDIDATES) -> dict:
             if not (stock.get("candles") or []) and (stock.get("on_moving_average_list") or stock.get("bearish_cross")):
                 reason = "This moving-average name has no saved history, so it was not read."
             else:
-                reason = "This name is not on the moving-average, price-volume, or RSI momentum list."
+                reason = "This name did not pass the moving-average, price-volume, and RSI momentum screens together."
             rejected.append({
                 "symbol": stock.get("symbol") or "",
                 "reason": reason,
+            })
+            continue
+        if not all(decision["screens"].values()):
+            rejected.append({
+                "symbol": decision["symbol"],
+                "reason": _missing_screen(decision["screens"]),
             })
             continue
         if decision["traps"]:
@@ -134,7 +140,7 @@ def evaluate_stock(stock: dict) -> Optional[dict]:
         return None
     last_close = float(candles[-1]["close"])
     strength = _relative_strength(closes)
-    on_crossover_list = bool(stock.get("on_moving_average_list") or stock.get("bearish_cross"))
+    on_crossover_list = bool(stock.get("on_moving_average_list"))
     screens = {
         "moving_average": cross_index is not None or long_bullish or on_crossover_list,
         "price_volume": breakout is not None,
@@ -438,7 +444,7 @@ def _book_call(packet: dict, traps: list[str], rsi: float, entry: Optional[float
         and target is not None
         and stop < entry < last_close < target
         and rsi < RSI_TRAP
-        and any(screens.values())
+        and all(screens.values())
     ):
         return "buy"
     if bearish:
@@ -473,6 +479,19 @@ def _order_size(policy: dict, entry: float) -> dict:
     if policy["segment"] in {"stock_derivative", "commodity_future"}:
         return {"quantity_basis": "one_lot", "budget_inr": None, "quantity": None}
     return {"quantity_basis": "unsupported", "budget_inr": None, "quantity": None}
+
+
+def _missing_screen(screens: dict) -> str:
+    labels = (
+        ("moving_average", "moving-average crossover"),
+        ("price_volume", "price and volume expansion"),
+        ("rsi_momentum_atr", "RSI momentum and ATR"),
+    )
+    missing = [label for key, label in labels if not screens.get(key)]
+    if len(missing) == 1:
+        return f"This name is not on the {missing[0]} screen, so it is not sent to the model."
+    joined = ", ".join(missing[:-1]) + " and " + missing[-1]
+    return f"This name is not on the {joined} screens, so it is not sent to the model."
 
 
 def _reason(stock: dict, breakout: Optional[dict], screens: dict, rsi: float, atr: float, strength: float, policy: dict, traps: list[str]) -> str:

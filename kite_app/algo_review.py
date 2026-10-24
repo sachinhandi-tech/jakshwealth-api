@@ -45,7 +45,7 @@ _INSTRUCTION = (
     "If a tool says the source is not connected or returned no text, that source was not read. "
     "Then work the book in this order: trend, participation, volatility, asymmetry, invalidation. "
     "Use the numbers in the payload, including the tape, and the tool text. "
-    "screens say whether this name is on the moving-average list, the price and volume list, or the RSI momentum and ATR list. "
+    "This name already passed the moving-average crossover, the price and volume expansion, and the RSI momentum and ATR screen. "
     "A false screen was not seen. "
     "book_call is the arithmetic. Confirm it or veto it. "
     "Do not call buy unless book_call is buy, every check passes, and all three sources were read. "

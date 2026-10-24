@@ -196,6 +196,78 @@ def test_scan_job_result_omits_the_access_token(monkeypatch):
     assert "secret-token" not in str(body)
 
 
+def test_saved_crossover_scans_are_read_without_the_open_browser(monkeypatch):
+    import json
+    from kite_app import scan_jobs
+
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("FERNET_KEY", raising=False)
+    scan_jobs._MEMORY.clear()
+    scan_jobs._LISTS.clear()
+    try:
+        scan_jobs._save_new("old-short", {"scan_mode": "crossover"}, "secret-token")
+        scan_jobs._finish("old-short", "done", json.dumps({
+            "scan_mode": "crossover",
+            "signals": [{"ticker": "OLD", "company": "Old Ltd", "crossover_type": "bullish"}],
+        }), None)
+        scan_jobs._save_new("new-short", {"scan_mode": "crossover"}, "secret-token")
+        scan_jobs._finish("new-short", "done", json.dumps({
+            "scan_mode": "crossover",
+            "signals": [{"ticker": "INFY", "company": "Infosys", "crossover_type": "bullish"}],
+        }), None)
+        scan_jobs._save_new("long", {"scan_mode": "price"}, "secret-token")
+        scan_jobs._finish("long", "done", json.dumps({
+            "scan_mode": "price",
+            "signals": [{"ticker": "TCS", "company": "TCS Ltd", "crossover_type": "bearish"}],
+        }), None)
+        saved = scan_jobs.latest_crossover_scans()
+        signals = scan_jobs.latest_crossover_signals()
+    finally:
+        scan_jobs._MEMORY.clear()
+        scan_jobs._LISTS.clear()
+    assert [row["ticker"] for row in saved["short"]["signals"]] == ["INFY"]
+    assert [row["ticker"] for row in saved["long"]["signals"]] == ["TCS"]
+    assert {row["symbol"]: row["crossover_type"] for row in signals} == {"INFY": "bullish", "TCS": "bearish"}
+    assert "secret-token" not in str(saved)
+
+
+def test_final_call_reads_the_saved_list_from_redis_before_the_jobs(monkeypatch):
+    from kite_app import scan_jobs
+
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("FERNET_KEY", raising=False)
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    scan_jobs._MEMORY.clear()
+    scan_jobs._LISTS.clear()
+    store = {}
+
+    def cache_get(key):
+        return store.get(key)
+
+    def cache_set(key, value, ttl=21600):
+        store[key] = value
+
+    monkeypatch.setattr("kite_app.desk_cache.cache_get", cache_get)
+    monkeypatch.setattr("kite_app.desk_cache.cache_set", cache_set)
+    try:
+        scan_jobs.save_crossover_list("crossover", {
+            "scan_mode": "crossover",
+            "signals": [{"ticker": "INFY", "company": "Infosys", "crossover_type": "bullish"}],
+        })
+        scan_jobs._LISTS.clear()
+        scan_jobs._MEMORY["noise"] = {
+            "status": "done",
+            "request_json": "{\"scan_mode\": \"crossover\"}",
+            "result_json": "{\"signals\": [{\"ticker\": \"NOISE\", \"crossover_type\": \"bearish\"}]}",
+        }
+        saved = scan_jobs.latest_crossover_scans()
+    finally:
+        scan_jobs._MEMORY.clear()
+        scan_jobs._LISTS.clear()
+    assert saved["short"]["signals"][0]["ticker"] == "INFY"
+    assert "crossover:short" in store
+
+
 def test_scan_returns_before_the_gateway_timeout(monkeypatch):
     import kite_app.signals as signals
 

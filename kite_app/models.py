@@ -42,6 +42,16 @@ class SignalScanJob(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class SavedCrossoverList(Base):
+    """Latest moving-average list for one horizon. One row, replaced when a scan finishes."""
+
+    __tablename__ = "saved_crossover_lists"
+
+    horizon: Mapped[str] = mapped_column(String(16), primary_key=True)
+    saved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    result_json: Mapped[str] = mapped_column(Text, nullable=False)
+
+
 class ZerodhaSession(Base):
     """One Kite access token per subscriber, encrypted, valid for a single IST date."""
 
