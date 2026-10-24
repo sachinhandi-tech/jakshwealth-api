@@ -29,6 +29,25 @@ SCAN_BUDGET_SECONDS = 22
 SCAN_BUDGET_SECONDS_ASYNC = 180
 
 
+def _signal_row(ticker: str, company: str, exchange: str, found: dict, scan_mode: str, short_window: int, long_window: int, short_type: str, long_type: str, trend_window: int) -> dict:
+    reason = explain_signal(
+        found,
+        scan_mode=scan_mode,
+        short_window=short_window,
+        long_window=long_window,
+        short_type=short_type,
+        long_type=long_type,
+        trend_window=trend_window,
+    )
+    return {
+        "ticker": ticker,
+        "company": company or ticker,
+        "exchange": str(exchange or "NSE").upper() or "NSE",
+        "reason": reason,
+        **found,
+    }
+
+
 def _scan_stock_cached(
     kite,
     ticker: str,
@@ -42,7 +61,8 @@ def _scan_stock_cached(
     long_type: str,
     scan_mode: str,
     exchange: str = "NSE",
-) -> tuple[Optional[dict], str]:
+    full_pass: bool = False,
+) -> tuple[Optional[object], str]:
     """Return a real crossover, or a status of none or skipped."""
     db_session = get_sessionmaker()()
     try:
@@ -61,6 +81,26 @@ def _scan_stock_cached(
         needed = long_window + 1
         if not candles or len(candles) < needed:
             return None, "skipped"
+        if full_pass:
+            found_rows = []
+            crossed = latest_crossover(
+                candles,
+                short_window,
+                50,
+                60,
+                short_type,
+                short_type,
+                "sma",
+                trend_window,
+            )
+            if crossed is not None:
+                found_rows.append(_signal_row(ticker, company, exchange, crossed, "crossover", short_window, 50, short_type, "sma", trend_window))
+            priced = latest_price_cross(candles, trend_window, lookback_days)
+            if priced is not None:
+                found_rows.append(_signal_row(ticker, company, exchange, priced, "price", short_window, trend_window, "sma", "sma", trend_window))
+            if not found_rows:
+                return None, "none"
+            return found_rows, "signal"
         if scan_mode == "price":
             found = latest_price_cross(candles, long_window, lookback_days)
         else:
@@ -115,6 +155,7 @@ def scan_nifty100_parallel_cached(
     scan_all_nse: bool = False,
     budget_seconds: Optional[float] = None,
     book: str = "equity",
+    full_pass: bool = False,
 ) -> dict:
     """Scan the chosen universe and keep only crosses inside the lookback."""
     start_time = time.monotonic()
@@ -193,6 +234,7 @@ def scan_nifty100_parallel_cached(
                     long_type,
                     scan_mode,
                     str(constituent.get("exchange") or "NSE"),
+                    full_pass,
                 )
                 futures[future] = constituent["ticker"]
 
@@ -201,13 +243,16 @@ def scan_nifty100_parallel_cached(
                     break
                 found, status = future.result()
                 scanned += 1
+                rows = found if isinstance(found, list) else ([found] if found else [])
                 if status == "skipped":
                     skipped += 1
-                elif found:
+                for item in rows:
+                    if not isinstance(item, dict):
+                        continue
                     source = next((row for row in queued if row["ticker"] == futures[future]), {})
-                    found["instrument_type"] = source.get("instrument_type") or "EQ"
-                    found["book"] = source.get("book") or book or "equity"
-                    signals.append(found)
+                    item["instrument_type"] = source.get("instrument_type") or "EQ"
+                    item["book"] = source.get("book") or book or "equity"
+                    signals.append(item)
                 note_scan(progress_key, scanned, universe_count, len(signals), True)
         finally:
             executor.shutdown(wait=False, cancel_futures=True)

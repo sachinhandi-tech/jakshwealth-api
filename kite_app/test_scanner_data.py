@@ -49,8 +49,7 @@ def test_equity_universe_keeps_regular_shares_only(monkeypatch):
     monkeypatch.setattr("kite_app.scanner_data._universe_cache", None)
     rows = equity_universe(Instruments())
 
-    assert [row["ticker"] for row in rows] == ["BAJAJ-AUTO", "BSEONLY", "INFY", "RELIANCE-BE", "TCS"]
-    assert next(row for row in rows if row["ticker"] == "BSEONLY")["exchange"] == "BSE"
+    assert [row["ticker"] for row in rows] == ["BAJAJ-AUTO", "INFY", "RELIANCE-BE", "TCS"]
     assert next(row for row in rows if row["ticker"] == "INFY")["exchange"] == "NSE"
     assert next(row for row in rows if row["ticker"] == "INFY")["token"] == 1
 
@@ -96,8 +95,8 @@ def test_trade_universe_splits_shares_futures_options_and_commodities(monkeypatc
         by_book.setdefault(row["book"], []).append(row["ticker"])
 
     assert by_book["equity"] == ["RELIANCE"]
-    assert by_book["stock_future"] == ["RELIANCE26NOVFUT"]
-    assert by_book["stock_option"] == ["RELIANCE26NOV1500CE", "RELIANCE26NOV1500PE"]
+    assert "stock_future" not in by_book
+    assert "stock_option" not in by_book
     assert by_book["commodity_future"] == ["GOLD26NOVFUT"]
 
 

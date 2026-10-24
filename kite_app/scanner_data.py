@@ -111,18 +111,17 @@ def _load_instruments(kite, exchange: str) -> list:
 
 
 def equity_universe(kite) -> list[dict]:
-    """Cash equity shares only. Futures and options stay on their own books."""
+    """NSE cash shares only. BSE, futures, and options are not part of this list."""
     return [row for row in trade_universe(kite) if row.get("book") == "equity"]
 
 
 def trade_universe(kite) -> list[dict]:
-    """Cash shares, stock futures, the nearest stock-option expiry, and commodity futures."""
+    """NSE cash shares and the nearest commodity-future expiry."""
     global _universe_cache
     now = time.monotonic()
     if _universe_cache and now - _universe_cache[0] < CACHE_SECONDS:
         return _universe_cache[1]
     rows = _cash_rows(kite)
-    rows.extend(_stock_derivative_rows(kite))
     rows.extend(_commodity_rows(kite))
     if not any(row["book"] == "equity" and row["exchange"] == "NSE" for row in rows):
         raise SignalScanError("Kite returned no NSE equity instruments.")
@@ -134,28 +133,27 @@ def trade_universe(kite) -> list[dict]:
 def _cash_rows(kite) -> list[dict]:
     rows = []
     seen = set()
-    for exchange in ("NSE", "BSE"):
-        for instrument in _load_instruments(kite, exchange):
-            if not isinstance(instrument, dict):
-                continue
-            if instrument.get("exchange") != exchange or instrument.get("instrument_type") != "EQ":
-                continue
-            if str(instrument.get("segment") or exchange) != exchange:
-                continue
-            symbol = str(instrument.get("tradingsymbol") or "").strip().upper()
-            token = instrument.get("instrument_token")
-            company = str(instrument.get("name") or symbol).strip() or symbol
-            if not symbol or symbol in seen or token is None or not _regular_equity(symbol, company):
-                continue
-            seen.add(symbol)
-            rows.append({
-                "ticker": symbol,
-                "company": company,
-                "token": int(token),
-                "exchange": exchange,
-                "instrument_type": "EQ",
-                "book": "equity",
-            })
+    for instrument in _load_instruments(kite, "NSE"):
+        if not isinstance(instrument, dict):
+            continue
+        if instrument.get("exchange") != "NSE" or instrument.get("instrument_type") != "EQ":
+            continue
+        if str(instrument.get("segment") or "NSE") != "NSE":
+            continue
+        symbol = str(instrument.get("tradingsymbol") or "").strip().upper()
+        token = instrument.get("instrument_token")
+        company = str(instrument.get("name") or symbol).strip() or symbol
+        if not symbol or symbol in seen or token is None or not _regular_equity(symbol, company):
+            continue
+        seen.add(symbol)
+        rows.append({
+            "ticker": symbol,
+            "company": company,
+            "token": int(token),
+            "exchange": "NSE",
+            "instrument_type": "EQ",
+            "book": "equity",
+        })
     return rows
 
 
@@ -220,8 +218,9 @@ def _commodity_rows(kite) -> list[dict]:
             "exchange": "MCX",
             "instrument_type": "FUT",
             "book": "commodity_future",
+            "expiry": expiry,
         })
-    return rows
+    return _front_expiry(rows)
 
 
 def build_scanner_payload(kite, budget_seconds: Optional[float] = None) -> dict:

@@ -42,12 +42,10 @@ _PUBLIC_FIELDS = (
 
 
 _FILLING = False
-_EQUITY_NOTE = "The backend is reading equities, stock futures, stock options, and commodity futures. A name appears in its own list after it passes the moving-average crossover, the price and volume expansion, and the RSI momentum and ATR screen."
+_EQUITY_NOTE = "The backend is reading NSE equities and front-month commodity futures. A name appears in its list after it passes the moving-average crossover, the price and volume expansion, and the RSI momentum and ATR screen."
 _BOOKS = (
-    ("equity", 5000),
-    ("stock_future", 3000),
-    ("stock_option", 12000),
-    ("commodity_future", 800),
+    ("equity", 2500),
+    ("commodity_future", 200),
 )
 
 
@@ -62,15 +60,15 @@ def ensure_listed_equity_scan(record: Optional[dict]) -> str:
     try:
         for book, cap in _BOOKS:
             if _book_running(book):
-                _start_cache_fill(record)
                 return _EQUITY_NOTE
             if _book_covered(book):
                 continue
-            enqueue_scan(record, _book_params(book, "crossover", 20, 50, 60, cap))
-            enqueue_scan(record, _book_params(book, "price", 200, 200, 120, cap))
-            _start_cache_fill(record)
+            params = _book_params(book, "price", 200, 200, 120, cap)
+            params["full_pass"] = True
+            params["short_window"] = 20
+            params["short_type"] = "ema"
+            enqueue_scan(record, params)
             return _EQUITY_NOTE
-        _start_cache_fill(record)
     except Exception:
         logger.info("listed equity scan was not started")
         return ""
@@ -322,12 +320,15 @@ def run_scan_job(job_id: str) -> None:
         
         # Use cached parallel scanner
         scan_all_nse = params.get("scan_all_nse", False)
-        budget = 1200 if scan_all_nse else 180
+        budget = 720 if params.get("full_pass") else 1200 if scan_all_nse else 180
         
         result = scan_nifty100_parallel_cached(kite, budget_seconds=budget, **params)
         result["scan_all_nse"] = bool(scan_all_nse)
+        result["full_pass"] = bool(params.get("full_pass"))
         _finish(job_id, "done", json.dumps(result), None)
         save_crossover_list(str(params.get("scan_mode") or result.get("scan_mode") or ""), result)
+        if result["full_pass"]:
+            save_crossover_list("short", result)
         
         logger.info(
             "Scan completed: %s stocks in %.1fs (cache: %s)",

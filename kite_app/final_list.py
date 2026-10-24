@@ -26,6 +26,8 @@ _PASS_LIMIT = 80
 _SLICE = 250
 
 
+_LOGIN_NOTE = "Log in to Zerodha to read NSE equities and commodity futures."
+_READ_NOTE = "Reading NSE equities and front-month commodity futures."
 _STOP_NOTE = "Scan stopped. Saved names stay on the lists."
 
 
@@ -34,7 +36,7 @@ def begin_final_list(record: Optional[dict], launch: bool = True) -> dict:
     from kite_app.desk_progress import scan_paused
 
     if not record or not record.get("api_key") or not record.get("access_token"):
-        _set_working(False, "Log in to Zerodha to read equities, stock futures, stock options, and commodity futures.")
+        _set_working(False, _LOGIN_NOTE)
         return public_snapshot()
     if scan_paused():
         _set_working(False, _FOCUS or _STOP_NOTE)
@@ -42,7 +44,7 @@ def begin_final_list(record: Optional[dict], launch: bool = True) -> dict:
     if launch:
         _launch(record)
     else:
-        _set_working(True, _FOCUS or "Reading equities, stock futures, stock options, and commodity futures.")
+        _set_working(True, _FOCUS or _READ_NOTE)
     return public_snapshot()
 
 
@@ -60,7 +62,7 @@ def continue_scan(record: Optional[dict]) -> dict:
     from kite_app.desk_progress import resume_scan
 
     if not record or not record.get("api_key") or not record.get("access_token"):
-        _set_working(False, "Log in to Zerodha to read equities, stock futures, stock options, and commodity futures.")
+        _set_working(False, _LOGIN_NOTE)
         return public_snapshot()
     resume_scan()
     _launch(record)
@@ -82,7 +84,7 @@ def public_snapshot() -> dict:
     if focus and focus not in lines:
         lines.append(focus)
     if not lines:
-        lines = ["Reading equities, stock futures, stock options, and commodity futures."]
+        lines = [_READ_NOTE]
     activity = []
     for index, text in enumerate(lines[-5:]):
         active = book["working"] and index == len(lines[-5:]) - 1
@@ -190,7 +192,7 @@ def _launch(record: dict) -> None:
             with _LOCK:
                 _RECORD = record
                 _WORKING = True
-                _FOCUS = "Queued equities, stock futures, stock options, and commodity futures. Batches keep running if this page closes."
+                _FOCUS = "Queued NSE equities and front-month commodity futures. Batches keep running if this page closes."
             return
     with _LOCK:
         _RECORD = record
@@ -199,7 +201,7 @@ def _launch(record: dict) -> None:
         _RUNNING = True
         _WORKING = True
         if not _FOCUS:
-            _FOCUS = "Reading equities, stock futures, stock options, and commodity futures."
+            _FOCUS = _READ_NOTE
     threading.Thread(target=_loop, daemon=True).start()
 
 
@@ -223,7 +225,7 @@ def _handle_pass(body: dict) -> None:
     wave = int(body.get("wave") or 0) + 1
     record = _session_for(user)
     if record is None:
-        _set_working(False, "Log in to Zerodha to read equities, stock futures, stock options, and commodity futures.")
+        _set_working(False, _LOGIN_NOTE)
         return
     if wave > _PASS_LIMIT:
         _set_working(False, "The equity read is still going. Open Final list again to continue.")
