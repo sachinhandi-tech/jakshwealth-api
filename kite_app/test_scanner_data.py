@@ -32,7 +32,8 @@ def test_equity_universe_keeps_regular_shares_only(monkeypatch):
                     {"exchange": "BSE", "segment": "BSE", "instrument_type": "EQ", "tradingsymbol": "INFY", "name": "Infosys", "instrument_token": 11},
                     {"exchange": "BSE", "segment": "BSE", "instrument_type": "EQ", "tradingsymbol": "BSEONLY", "name": "Bse Only", "instrument_token": 12},
                 ]
-            assert exchange == "NSE"
+            if exchange != "NSE":
+                return []
             return [
                 {"exchange": "NSE", "segment": "NSE", "instrument_type": "EQ", "tradingsymbol": "TCS", "name": "Tata", "instrument_token": 2},
                 {"exchange": "NSE", "segment": "NSE", "instrument_type": "EQ", "tradingsymbol": "INFY", "name": "Infosys", "instrument_token": 1},
@@ -52,6 +53,52 @@ def test_equity_universe_keeps_regular_shares_only(monkeypatch):
     assert next(row for row in rows if row["ticker"] == "BSEONLY")["exchange"] == "BSE"
     assert next(row for row in rows if row["ticker"] == "INFY")["exchange"] == "NSE"
     assert next(row for row in rows if row["ticker"] == "INFY")["token"] == 1
+
+
+def test_trade_universe_splits_shares_futures_options_and_commodities(monkeypatch):
+    from datetime import date
+
+    near = date(2026, 11, 26)
+    far = date(2026, 12, 31)
+
+    class Instruments:
+        def instruments(self, exchange):
+            if exchange == "NSE":
+                return [
+                    {"exchange": "NSE", "segment": "NSE", "instrument_type": "EQ", "tradingsymbol": "RELIANCE", "name": "Reliance", "instrument_token": 1},
+                    {"exchange": "NSE", "segment": "NSE", "instrument_type": "EQ", "tradingsymbol": "500325", "name": "Numeric junk", "instrument_token": 2},
+                ]
+            if exchange == "BSE":
+                return [
+                    {"exchange": "BSE", "segment": "BSE", "instrument_type": "EQ", "tradingsymbol": "PREFCO", "name": "Prefco Preference", "instrument_token": 3},
+                ]
+            if exchange == "NFO":
+                return [
+                    {"exchange": "NFO", "instrument_type": "FUT", "tradingsymbol": "NIFTY26NOVFUT", "name": "NIFTY", "instrument_token": 4, "expiry": near},
+                    {"exchange": "NFO", "instrument_type": "FUT", "tradingsymbol": "RELIANCE26NOVFUT", "name": "RELIANCE", "instrument_token": 5, "expiry": near},
+                    {"exchange": "NFO", "instrument_type": "CE", "tradingsymbol": "RELIANCE26NOV1500CE", "name": "RELIANCE", "instrument_token": 6, "expiry": near},
+                    {"exchange": "NFO", "instrument_type": "CE", "tradingsymbol": "RELIANCE26DEC1500CE", "name": "RELIANCE", "instrument_token": 7, "expiry": far},
+                    {"exchange": "NFO", "instrument_type": "PE", "tradingsymbol": "RELIANCE26NOV1500PE", "name": "RELIANCE", "instrument_token": 8, "expiry": near},
+                ]
+            if exchange == "MCX":
+                return [
+                    {"exchange": "MCX", "instrument_type": "FUT", "tradingsymbol": "GOLD26NOVFUT", "name": "GOLD", "instrument_token": 9, "expiry": near},
+                    {"exchange": "MCX", "instrument_type": "CE", "tradingsymbol": "GOLD26NOVCE", "name": "GOLD", "instrument_token": 10, "expiry": near},
+                ]
+            return []
+
+    monkeypatch.setattr("kite_app.scanner_data._universe_cache", None)
+    from kite_app.scanner_data import trade_universe
+
+    rows = trade_universe(Instruments())
+    by_book: dict[str, list[str]] = {}
+    for row in rows:
+        by_book.setdefault(row["book"], []).append(row["ticker"])
+
+    assert by_book["equity"] == ["RELIANCE"]
+    assert by_book["stock_future"] == ["RELIANCE26NOVFUT"]
+    assert by_book["stock_option"] == ["RELIANCE26NOV1500CE", "RELIANCE26NOV1500PE"]
+    assert by_book["commodity_future"] == ["GOLD26NOVFUT"]
 
 
 def test_scanner_payload_caches_candles_without_secrets(monkeypatch, tmp_path):

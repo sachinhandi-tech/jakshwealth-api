@@ -36,36 +36,47 @@ _PUBLIC_FIELDS = (
     "skipped",
     "signals",
     "scan_all_nse",
+    "book",
+    "empty_book",
 )
 
 
 _FILLING = False
-_EQUITY_NOTE = "The backend is reading NSE and BSE equities. A name appears here after it passes the moving-average crossover, the price and volume expansion, and the RSI momentum and ATR screen."
+_EQUITY_NOTE = "The backend is reading equities, stock futures, stock options, and commodity futures. A name appears in its own list after it passes the moving-average crossover, the price and volume expansion, and the RSI momentum and ATR screen."
+_BOOKS = (
+    ("equity", 5000),
+    ("stock_future", 3000),
+    ("stock_option", 12000),
+    ("commodity_future", 800),
+)
 
 
 def ensure_listed_equity_scan(record: Optional[dict]) -> str:
-    """Start one full cash-equity read when today's scans do not cover the universe."""
+    """Start the next unread book. One book runs at a time so Zerodha is not flooded."""
     if not record or not record.get("api_key") or not record.get("access_token"):
         return ""
     try:
-        if _equity_scan_active():
+        for book, cap in _BOOKS:
+            if _book_running(book):
+                _start_cache_fill(record)
+                return _EQUITY_NOTE
+            if _book_covered(book):
+                continue
+            enqueue_scan(record, _book_params(book, "crossover", 20, 50, 60, cap))
+            enqueue_scan(record, _book_params(book, "price", 200, 200, 120, cap))
             _start_cache_fill(record)
             return _EQUITY_NOTE
-        if _equity_scan_covers_universe():
-            _start_cache_fill(record)
-            return ""
-        enqueue_scan(record, _equity_params("crossover", 20, 50, 60))
-        enqueue_scan(record, _equity_params("price", 200, 200, 120))
         _start_cache_fill(record)
     except Exception:
         logger.info("listed equity scan was not started")
         return ""
-    return _EQUITY_NOTE
+    return ""
 
 
-def _equity_params(scan_mode: str, long_window: int, trend_window: int, lookback_days: int) -> dict:
+def _book_params(book: str, scan_mode: str, long_window: int, trend_window: int, lookback_days: int, max_stocks: int) -> dict:
     return {
         "scan_mode": scan_mode,
+        "book": book,
         "ma_type": "ema" if scan_mode == "crossover" else "sma",
         "short_type": "ema" if scan_mode == "crossover" else "sma",
         "long_type": "sma",
@@ -73,7 +84,7 @@ def _equity_params(scan_mode: str, long_window: int, trend_window: int, lookback
         "long_window": long_window,
         "trend_window": trend_window,
         "lookback_days": lookback_days,
-        "max_stocks": 8000,
+        "max_stocks": max_stocks,
         "scan_all_nse": True,
     }
 
@@ -103,9 +114,16 @@ def equity_work_pending() -> bool:
 
 
 def _equity_scan_covers_universe() -> bool:
-    saved = latest_crossover_scans()
+    return all(_book_covered(book) for book, _cap in _BOOKS)
+
+
+def _book_covered(book: str) -> bool:
+    saved = _stored_lists()
     for kind in ("short", "long"):
-        result = saved.get(kind) or {}
+        key = kind if book == "equity" else f"{book}-{kind}"
+        result = saved.get(key) or {}
+        if result.get("empty_book") is True:
+            continue
         if result.get("scan_all_nse") is not True:
             return False
         universe = int(result.get("universe") or 0)
@@ -113,6 +131,27 @@ def _equity_scan_covers_universe() -> bool:
         if universe <= 0 or covered < universe:
             return False
     return True
+
+
+def _book_running(book: str) -> bool:
+    if not _use_database():
+        return any(_request_book(row.get("request_json")) == book and row.get("status") == "running" for row in _MEMORY.values())
+    db = get_sessionmaker()()
+    try:
+        jobs = db.query(SignalScanJob).filter(SignalScanJob.status == "running").all()
+    finally:
+        db.close()
+    return any(_request_book(job.request_json) == book for job in jobs)
+
+
+def _request_book(raw: Optional[str]) -> str:
+    try:
+        params = json.loads(raw or "")
+    except json.JSONDecodeError:
+        return ""
+    if not params.get("scan_all_nse"):
+        return ""
+    return str(params.get("book") or "equity")
 
 
 def _start_cache_fill(record: dict) -> None:
@@ -205,22 +244,25 @@ def save_crossover_list(scan_mode: str, result: dict) -> None:
     if not isinstance(result, dict):
         return
     kind = scan_mode if scan_mode in {"short", "long"} else _horizon(scan_mode or str(result.get("scan_mode") or ""))
+    book = str(result.get("book") or "equity")
+    key = kind if book == "equity" else f"{book}-{kind}"
     public = _public_result(result)
     public["scan_mode"] = "price" if kind == "long" else public.get("scan_mode") or "crossover"
+    public["book"] = book
     try:
-        _write_list(kind, public)
+        _write_list(key, public)
     except Exception:
         logger.info("crossover list was not stored")
         return
-    _remember_cache(kind, public)
+    _remember_cache(key, public)
 
 
 def latest_crossover_signals() -> list[dict]:
     """Symbols from the saved scans. The browser does not have to still be open."""
     rows = []
     seen = set()
-    saved = latest_crossover_scans()
-    for result in (saved["short"], saved["long"]):
+    saved = _stored_lists()
+    for result in saved.values():
         if not result:
             continue
         for signal in result.get("signals") or []:
@@ -235,6 +277,7 @@ def latest_crossover_signals() -> list[dict]:
                 "company_name": signal.get("company") or signal.get("company_name") or symbol,
                 "crossover_type": signal.get("crossover_type") or "",
                 "exchange": str(signal.get("exchange") or "NSE").upper() or "NSE",
+                "instrument_type": str(signal.get("instrument_type") or "EQ").upper() or "EQ",
             })
     return rows
 
@@ -375,10 +418,10 @@ def _remember_cache(kind: str, result: dict) -> None:
 
 
 def _stored_lists() -> dict[str, Optional[dict]]:
-    found: dict[str, Optional[dict]] = {"short": None, "long": None}
+    found: dict[str, Optional[dict]] = {}
     if not _use_database():
         for kind, result in _LISTS.items():
-            if kind in found and isinstance(result, dict):
+            if isinstance(result, dict):
                 found[kind] = result
         return found
     from kite_app.models import SavedCrossoverList, get_sessionmaker
@@ -386,7 +429,7 @@ def _stored_lists() -> dict[str, Optional[dict]]:
     db = get_sessionmaker()()
     try:
         for row in db.query(SavedCrossoverList).all():
-            if row.horizon not in found or not row.result_json:
+            if not row.result_json:
                 continue
             try:
                 result = json.loads(row.result_json)
@@ -396,6 +439,9 @@ def _stored_lists() -> dict[str, Optional[dict]]:
                 found[row.horizon] = result
     finally:
         db.close()
+    for kind, result in _LISTS.items():
+        if kind not in found and isinstance(result, dict):
+            found[kind] = result
     return found
 
 

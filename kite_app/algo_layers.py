@@ -116,6 +116,9 @@ def combine_books(posted: list[dict], signals: list[dict], cached: list[dict]) -
         if exchange:
             row["exchange"] = exchange
         row["listed"] = True
+        kind_name = str(signal.get("instrument_type") or "").upper()
+        if kind_name:
+            row["instrument_type"] = kind_name
         if not row.get("company_name"):
             row["company_name"] = signal.get("company_name") or symbol
         kind = str(signal.get("crossover_type") or "").lower()
@@ -372,8 +375,10 @@ def _market_policy(exchange: str, instrument_type: str) -> dict:
     kind = instrument_type.upper()
     if market in {"NSE", "BSE"} and kind in {"", "EQ"}:
         return {"exchange": market, "segment": "equity", "gtt": True, "product": "CNC"}
-    if market == "NFO" and kind in {"FUT", "CE", "PE"}:
-        return {"exchange": "NFO", "segment": "stock_derivative", "gtt": True, "product": "NRML"}
+    if market == "NFO" and kind == "FUT":
+        return {"exchange": "NFO", "segment": "stock_future", "gtt": True, "product": "NRML"}
+    if market == "NFO" and kind in {"CE", "PE"}:
+        return {"exchange": "NFO", "segment": "stock_option", "gtt": True, "product": "NRML"}
     if market == "MCX" and kind == "FUT":
         return {"exchange": "MCX", "segment": "commodity_future", "gtt": True, "product": "NRML"}
     return {"exchange": market or "NSE", "segment": "unsupported", "gtt": False, "product": ""}
@@ -483,7 +488,7 @@ def _order_size(policy: dict, entry: float) -> dict:
             "budget_inr": int(EQUITY_BUDGET_INR),
             "quantity": share_quantity(Decimal(str(entry))),
         }
-    if policy["segment"] in {"stock_derivative", "commodity_future"}:
+    if policy["segment"] in {"stock_future", "stock_option", "commodity_future"}:
         return {"quantity_basis": "one_lot", "budget_inr": None, "quantity": None}
     return {"quantity_basis": "unsupported", "budget_inr": None, "quantity": None}
 
@@ -523,7 +528,7 @@ def _reason(stock: dict, breakout: Optional[dict], screens: dict, rsi: float, at
     )
     if policy["segment"] == "equity":
         text += " The buy is one lakh rupees of shares, sized from the entry. A confirmed holding can place one NSE CNC two-leg sell GTT at the stop and the 2R target."
-    elif policy["segment"] == "stock_derivative":
+    elif policy["segment"] in {"stock_future", "stock_option"}:
         text += " The order is one lot on NFO, product NRML, and it is not an equity delivery order."
     elif policy["segment"] == "commodity_future":
         text += " The order is one lot on MCX, product NRML, and it is not an equity delivery order."

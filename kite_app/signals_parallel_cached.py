@@ -114,6 +114,7 @@ def scan_nifty100_parallel_cached(
     max_stocks: int = 100,
     scan_all_nse: bool = False,
     budget_seconds: Optional[float] = None,
+    book: str = "equity",
 ) -> dict:
     """Scan the chosen universe and keep only crosses inside the lookback."""
     start_time = time.monotonic()
@@ -121,13 +122,15 @@ def scan_nifty100_parallel_cached(
     universe_count = 0
     scanned = 0
     signals: list[dict] = []
+    progress_key = f"{book}:{scan_mode}" if scan_all_nse else scan_mode
 
     db = get_sessionmaker()()
     try:
         if scan_all_nse:
-            from kite_app.scanner_data import equity_universe
+            from kite_app.scanner_data import trade_universe
 
-            constituents = equity_universe(kite)
+            wanted = book or "equity"
+            constituents = [row for row in trade_universe(kite) if row.get("book") == wanted]
         else:
             tokens = nse_equity_tokens(kite)
             constituents = [
@@ -136,6 +139,17 @@ def scan_nifty100_parallel_cached(
             ]
 
         if not constituents:
+            if scan_all_nse:
+                return {
+                    "scan_mode": str(scan_mode),
+                    "book": book or "equity",
+                    "universe": 0,
+                    "scanned": 0,
+                    "skipped": 0,
+                    "signals": [],
+                    "empty_book": True,
+                    "scan_all_nse": True,
+                }
             raise SignalScanError("Could not load stock universe")
 
         constituents = constituents[:max_stocks]
@@ -156,7 +170,7 @@ def scan_nifty100_parallel_cached(
         scanned = 0
         from kite_app.desk_progress import note_scan
 
-        note_scan(scan_mode, 0, universe_count, 0, True)
+        note_scan(progress_key, 0, universe_count, 0, True)
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
             futures = {}
             for constituent in queued:
@@ -187,10 +201,13 @@ def scan_nifty100_parallel_cached(
                 if status == "skipped":
                     skipped += 1
                 elif found:
+                    source = next((row for row in queued if row["ticker"] == futures[future]), {})
+                    found["instrument_type"] = source.get("instrument_type") or "EQ"
+                    found["book"] = source.get("book") or book or "equity"
                     signals.append(found)
                 from kite_app.desk_progress import note_scan
 
-                note_scan(scan_mode, scanned, universe_count, len(signals), True)
+                note_scan(progress_key, scanned, universe_count, len(signals), True)
 
         signals.sort(key=lambda row: (row["crossover_date"], row["ticker"]), reverse=True)
         for rank, signal in enumerate(signals, start=1):
@@ -220,6 +237,7 @@ def scan_nifty100_parallel_cached(
             "elapsed_seconds": round(float(elapsed), 2),
             "workers": int(MAX_WORKERS),
             "cache": cache_info,
+            "book": book or "equity",
         }
     except SignalScanError:
         raise
@@ -231,7 +249,7 @@ def scan_nifty100_parallel_cached(
         try:
             from kite_app.desk_progress import note_scan
 
-            note_scan(scan_mode, scanned, universe_count, len(signals), False)
+            note_scan(progress_key, scanned, universe_count, len(signals), False)
         except Exception:
             pass
         db.close()

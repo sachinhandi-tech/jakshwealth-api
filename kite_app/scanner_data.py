@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import os
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -66,40 +66,81 @@ def cache_path() -> Path:
     return DEFAULT_SESSION_PATH.parent / "scanner-data.json"
 
 
+_INDEX_UNDERLYINGS = frozenset({
+    "NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50",
+    "SENSEX", "BANKEX", "NIFTYIT", "NIFTYMIDSELECT",
+})
+_DEBT_MARKERS = ("DEBENTURE", "PREFERENCE", "PREF SHARE", " NCD", "WARRANT", "RIGHTS ENTITLEMENT")
+
+
 def _regular_equity(symbol: str, company: str) -> bool:
     """EQ-series shares. Drops SME, debt, bonds, rights, warrants, and ETFs."""
     name = company.upper()
     if "ETF" in name or "EXCHANGE TRADED" in name or "GOLD BOND" in name:
+        return False
+    if any(marker in name for marker in _DEBT_MARKERS):
+        return False
+    if symbol.isdigit():
         return False
     if "-" not in symbol:
         return True
     return symbol.rsplit("-", 1)[-1] not in _OTHER_SERIES
 
 
+def _as_date(value: object) -> Optional[date]:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    text = str(value or "")[:10]
+    try:
+        return date.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def _load_instruments(kite, exchange: str) -> list:
+    try:
+        return list(kite.instruments(exchange) or [])
+    except TokenException:
+        raise
+    except KiteException as exc:
+        if exchange == "NSE":
+            raise SignalScanError("Kite could not load NSE instruments.") from exc
+        return []
+
+
 def equity_universe(kite) -> list[dict]:
-    """NSE equity shares, plus BSE shares that are not already listed on NSE."""
+    """Cash equity shares only. Futures and options stay on their own books."""
+    return [row for row in trade_universe(kite) if row.get("book") == "equity"]
+
+
+def trade_universe(kite) -> list[dict]:
+    """Cash shares, stock futures, the nearest stock-option expiry, and commodity futures."""
     global _universe_cache
     now = time.monotonic()
     if _universe_cache and now - _universe_cache[0] < CACHE_SECONDS:
         return _universe_cache[1]
+    rows = _cash_rows(kite)
+    rows.extend(_stock_derivative_rows(kite))
+    rows.extend(_commodity_rows(kite))
+    if not any(row["book"] == "equity" and row["exchange"] == "NSE" for row in rows):
+        raise SignalScanError("Kite returned no NSE equity instruments.")
+    rows.sort(key=lambda row: (row["book"], row["ticker"]))
+    _universe_cache = (now, rows)
+    return rows
+
+
+def _cash_rows(kite) -> list[dict]:
     rows = []
     seen = set()
     for exchange in ("NSE", "BSE"):
-        try:
-            instruments = kite.instruments(exchange) or []
-        except TokenException:
-            raise
-        except KiteException as exc:
-            if exchange == "NSE":
-                raise SignalScanError("Kite could not load NSE instruments.") from exc
-            continue
-        for instrument in instruments:
+        for instrument in _load_instruments(kite, exchange):
             if not isinstance(instrument, dict):
                 continue
             if instrument.get("exchange") != exchange or instrument.get("instrument_type") != "EQ":
                 continue
-            segment = str(instrument.get("segment") or exchange)
-            if segment != exchange:
+            if str(instrument.get("segment") or exchange) != exchange:
                 continue
             symbol = str(instrument.get("tradingsymbol") or "").strip().upper()
             token = instrument.get("instrument_token")
@@ -107,11 +148,79 @@ def equity_universe(kite) -> list[dict]:
             if not symbol or symbol in seen or token is None or not _regular_equity(symbol, company):
                 continue
             seen.add(symbol)
-            rows.append({"ticker": symbol, "company": company, "token": int(token), "exchange": exchange})
-    rows.sort(key=lambda row: row["ticker"])
-    if not rows:
-        raise SignalScanError("Kite returned no NSE equity instruments.")
-    _universe_cache = (now, rows)
+            rows.append({
+                "ticker": symbol,
+                "company": company,
+                "token": int(token),
+                "exchange": exchange,
+                "instrument_type": "EQ",
+                "book": "equity",
+            })
+    return rows
+
+
+def _stock_derivative_rows(kite) -> list[dict]:
+    futures = []
+    options = []
+    today = datetime.now(timezone.utc).date()
+    for instrument in _load_instruments(kite, "NFO"):
+        if not isinstance(instrument, dict) or instrument.get("exchange") != "NFO":
+            continue
+        kind = str(instrument.get("instrument_type") or "").upper()
+        underlying = str(instrument.get("name") or "").strip().upper()
+        symbol = str(instrument.get("tradingsymbol") or "").strip().upper()
+        token = instrument.get("instrument_token")
+        expiry = _as_date(instrument.get("expiry"))
+        if not underlying or underlying in _INDEX_UNDERLYINGS or not symbol or token is None or expiry is None or expiry < today:
+            continue
+        row = {
+            "ticker": symbol,
+            "company": underlying,
+            "token": int(token),
+            "exchange": "NFO",
+            "instrument_type": kind,
+            "expiry": expiry,
+        }
+        if kind == "FUT":
+            row["book"] = "stock_future"
+            futures.append(row)
+        elif kind in {"CE", "PE"}:
+            row["book"] = "stock_option"
+            options.append(row)
+    return futures + _front_expiry(options)
+
+
+def _front_expiry(rows: list[dict]) -> list[dict]:
+    nearest: dict[str, date] = {}
+    for row in rows:
+        current = nearest.get(row["company"])
+        if current is None or row["expiry"] < current:
+            nearest[row["company"]] = row["expiry"]
+    return [row for row in rows if row["expiry"] == nearest.get(row["company"])]
+
+
+def _commodity_rows(kite) -> list[dict]:
+    rows = []
+    today = datetime.now(timezone.utc).date()
+    for instrument in _load_instruments(kite, "MCX"):
+        if not isinstance(instrument, dict) or instrument.get("exchange") != "MCX":
+            continue
+        if str(instrument.get("instrument_type") or "").upper() != "FUT":
+            continue
+        symbol = str(instrument.get("tradingsymbol") or "").strip().upper()
+        token = instrument.get("instrument_token")
+        expiry = _as_date(instrument.get("expiry"))
+        company = str(instrument.get("name") or symbol).strip() or symbol
+        if not symbol or token is None or expiry is None or expiry < today:
+            continue
+        rows.append({
+            "ticker": symbol,
+            "company": company,
+            "token": int(token),
+            "exchange": "MCX",
+            "instrument_type": "FUT",
+            "book": "commodity_future",
+        })
     return rows
 
 

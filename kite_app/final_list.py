@@ -29,12 +29,12 @@ _SLICE = 250
 def begin_final_list(record: Optional[dict], launch: bool = True) -> dict:
     """Start the equity read if needed and return the lines the desk can show now."""
     if not record or not record.get("api_key") or not record.get("access_token"):
-        _set_working(False, "Log in to Zerodha to read NSE and BSE equities.")
+        _set_working(False, "Log in to Zerodha to read equities, stock futures, stock options, and commodity futures.")
         return public_snapshot()
     if launch:
         _launch(record)
     else:
-        _set_working(True, _FOCUS or "Reading NSE and BSE equities.")
+        _set_working(True, _FOCUS or "Reading equities, stock futures, stock options, and commodity futures.")
     return public_snapshot()
 
 
@@ -52,7 +52,7 @@ def public_snapshot() -> dict:
     if focus and focus not in lines:
         lines.append(focus)
     if not lines:
-        lines = ["Reading NSE and BSE equities."]
+        lines = ["Reading equities, stock futures, stock options, and commodity futures."]
     activity = []
     for index, text in enumerate(lines[-5:]):
         active = book["working"] and index == len(lines[-5:]) - 1
@@ -132,10 +132,20 @@ def _progress_lines() -> list[str]:
         "crossover": "Moving-average crossover",
         "price": "Long moving average",
     }
-    for mode, label in labels.items():
-        row = scan_status().get(mode) or {}
+    books = {
+        "equity": "Equities",
+        "stock_future": "Stock futures",
+        "stock_option": "Stock options",
+        "commodity_future": "Commodity futures",
+    }
+    for mode, row in scan_status().items():
         total = int(row.get("total") or 0)
         if row.get("running") and total:
+            if ":" in mode:
+                book, kind = mode.split(":", 1)
+                label = f"{books.get(book, book)} {labels.get(kind, kind).lower()}"
+            else:
+                label = labels.get(mode, mode)
             lines.append(f"{label}: {int(row.get('done') or 0)} of {total} names.")
     return lines
 
@@ -150,7 +160,7 @@ def _launch(record: dict) -> None:
             with _LOCK:
                 _RECORD = record
                 _WORKING = True
-                _FOCUS = "Queued NSE and BSE names. Batches keep running if this page closes."
+                _FOCUS = "Queued equities, stock futures, stock options, and commodity futures. Batches keep running if this page closes."
             return
     with _LOCK:
         _RECORD = record
@@ -159,7 +169,7 @@ def _launch(record: dict) -> None:
         _RUNNING = True
         _WORKING = True
         if not _FOCUS:
-            _FOCUS = "Reading NSE and BSE equities."
+            _FOCUS = "Reading equities, stock futures, stock options, and commodity futures."
     threading.Thread(target=_loop, daemon=True).start()
 
 
@@ -181,7 +191,7 @@ def _handle_pass(body: dict) -> None:
     wave = int(body.get("wave") or 0) + 1
     record = _session_for(user)
     if record is None:
-        _set_working(False, "Log in to Zerodha to read NSE and BSE equities.")
+        _set_working(False, "Log in to Zerodha to read equities, stock futures, stock options, and commodity futures.")
         return
     if wave > _PASS_LIMIT:
         _set_working(False, "The equity read is still going. Open Final list again to continue.")
