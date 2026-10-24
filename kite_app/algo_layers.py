@@ -1,10 +1,9 @@
-"""High-volume breakout and retest, then rank and reject traps.
+"""Combined book for the final call.
 
-Layer 1 keeps a name only when the 20 EMA has crossed above the 50 SMA
-inside the last 20 sessions and a 3x volume breakout has been retested.
-Layer 2 ranks those names by ATR, RSI, and 20-session relative strength.
-Layer 3 drops blow-off and failed-retest bars. Sector membership is not
-on this feed. Filings, news, and lawsuits come only from the research tools.
+A name is read when it is on the moving-average crossover list, the price
+and volume expansion list, or the RSI momentum and ATR list. The model
+sees that combined book. Sector membership is not on this feed. Filings,
+news, and lawsuits come only from the research tools.
 """
 
 from __future__ import annotations
@@ -15,7 +14,7 @@ from decimal import Decimal
 
 from kite_app.breakout_scan import PRICE_LOOKBACK, _scan_stock
 from kite_app.gtt_orders import EQUITY_BUDGET_INR, share_quantity
-from kite_app.signals import exponential_moving_average, simple_moving_average
+from kite_app.signals import exponential_moving_average, latest_price_cross, simple_moving_average
 
 EMA_WINDOW = 20
 SMA_WINDOW = 50
@@ -38,9 +37,13 @@ def select_setups(stocks: list[dict], limit: int = TOP_CANDIDATES) -> dict:
     for stock in stocks:
         decision = evaluate_stock(stock)
         if decision is None:
+            if not (stock.get("candles") or []) and (stock.get("on_moving_average_list") or stock.get("bearish_cross")):
+                reason = "This moving-average name has no saved history, so it was not read."
+            else:
+                reason = "This name is not on the moving-average, price-volume, or RSI momentum list."
             rejected.append({
                 "symbol": stock.get("symbol") or "",
-                "reason": "No 20 EMA cross of the 50 SMA with a 3x volume breakout retest.",
+                "reason": reason,
             })
             continue
         if decision["traps"]:
@@ -51,7 +54,7 @@ def select_setups(stocks: list[dict], limit: int = TOP_CANDIDATES) -> dict:
             })
             continue
         accepted.append(decision)
-    accepted.sort(key=lambda item: (-item["score"], item["symbol"]))
+    accepted.sort(key=lambda item: (-item["screen_count"], -int(item["listed"]), -item["score"], item["symbol"]))
     chosen = accepted[:limit]
     for rank, item in enumerate(chosen, start=1):
         item["rank"] = rank
@@ -60,67 +63,123 @@ def select_setups(stocks: list[dict], limit: int = TOP_CANDIDATES) -> dict:
 
     review_setups(chosen)
     review_setups(sell_book)
+    sell_calls = [item for item in sell_book if item.get("ai_decision") == "sell"]
+    seen = {item["symbol"] for item in sell_calls}
+    for item in chosen:
+        if item.get("ai_decision") == "sell" and item["symbol"] not in seen:
+            sell_calls.append(item)
     return {
         "scanned": len(stocks),
         "accepted": len(accepted),
         "setups": chosen,
-        "sell_calls": [item for item in sell_book if item.get("ai_decision") == "sell"],
+        "sell_calls": sell_calls,
         "rejected": rejected,
     }
 
 
+def combine_books(posted: list[dict], signals: list[dict], cached: list[dict]) -> list[dict]:
+    """One row per symbol. Posted candles win. A signal marks the crossover list."""
+    by_symbol: dict[str, dict] = {}
+    for source in (cached, posted):
+        for stock in source:
+            symbol = str(stock.get("symbol") or "").upper()
+            if not symbol or not stock.get("candles"):
+                continue
+            row = dict(stock)
+            row["symbol"] = symbol
+            if source is posted:
+                row["listed"] = True
+            by_symbol[symbol] = row
+    for signal in signals:
+        symbol = str(signal.get("symbol") or "").upper()
+        if not symbol:
+            continue
+        row = dict(by_symbol.get(symbol) or {
+            "symbol": symbol,
+            "company_name": signal.get("company_name") or symbol,
+            "exchange": "NSE",
+            "instrument_type": "EQ",
+            "candles": [],
+        })
+        row["symbol"] = symbol
+        row["listed"] = True
+        if not row.get("company_name"):
+            row["company_name"] = signal.get("company_name") or symbol
+        kind = str(signal.get("crossover_type") or "").lower()
+        if kind == "bullish":
+            row["on_moving_average_list"] = True
+        elif kind == "bearish":
+            row["bearish_cross"] = True
+        by_symbol[symbol] = row
+    return list(by_symbol.values())
+
+
 def evaluate_stock(stock: dict) -> Optional[dict]:
     candles = stock.get("candles") or []
+    if len(candles) < 2:
+        return None
     closes = [float(item["close"]) for item in candles]
     cross_index = _trend_cross_index(closes)
+    long_cross = latest_price_cross(candles, 200, 120)
+    long_bullish = isinstance(long_cross, dict) and long_cross.get("crossover_type") == "bullish"
     breakout = _scan_stock({
         "symbol": stock.get("symbol") or "",
         "company_name": stock.get("company_name") or stock.get("symbol") or "",
         "instrument_token": stock.get("instrument_token"),
         "candles": candles,
     })
-    if cross_index is None or breakout is None:
-        return None
-    entry = float(breakout["midpoint"])
-    stop = float(breakout["breakout_low"]) * (1 - STOP_BUFFER)
-    last_close = float(candles[-1]["close"])
-    if not stop < entry < last_close:
-        return None
-    risk = entry - stop
-    target = entry + REWARD_R * risk
-    if target <= last_close:
-        return None
     atr = _atr(candles)
     rsi = _rsi(closes)
     if atr is None or rsi is None or atr <= 0:
         return None
-    policy = _market_policy(stock.get("exchange") or "NSE", stock.get("instrument_type") or "EQ")
-    size = _order_size(policy, entry)
-    traps = _traps(candles, breakout, rsi, atr)
+    last_close = float(candles[-1]["close"])
     strength = _relative_strength(closes)
-    score = _score(breakout["vol_multiple"], rsi, atr / last_close, strength)
-    reason = _reason(breakout, cross_index, rsi, atr, strength, policy, traps)
-    desk = _desk(candles, breakout, entry, stop, target, atr, rsi, traps, float(breakout["vol_multiple"]))
+    on_crossover_list = bool(stock.get("on_moving_average_list") or stock.get("bearish_cross"))
+    screens = {
+        "moving_average": cross_index is not None or long_bullish or on_crossover_list,
+        "price_volume": breakout is not None,
+        "rsi_momentum_atr": _rsi_momentum(rsi, atr, last_close, strength),
+    }
+    bearish = bool(stock.get("bearish_cross"))
+    if not any(screens.values()):
+        return None
+    levels = _levels(last_close, breakout, closes)
+    if levels is None:
+        entry = stop = target = None
+    else:
+        entry, stop, target = levels
+    policy = _market_policy(stock.get("exchange") or "NSE", stock.get("instrument_type") or "EQ")
+    size = _order_size(policy, entry if entry is not None else last_close)
+    traps = _traps(candles, breakout, rsi, atr)
+    volume_multiple = 0.0 if breakout is None else float(breakout["vol_multiple"])
+    score = _score(volume_multiple, rsi, atr / last_close, strength)
+    reason = _reason(stock, breakout, screens, rsi, atr, strength, policy, traps)
+    desk = _desk(candles, breakout, entry, stop, target, atr, rsi, traps, volume_multiple, screens, bearish)
+    symbol = str(stock.get("symbol") or (breakout or {}).get("symbol") or "")
+    company = str(stock.get("company_name") or (breakout or {}).get("company_name") or symbol)
     return {
-        "symbol": breakout["symbol"],
-        "company_name": breakout["company_name"],
+        "symbol": symbol,
+        "company_name": company,
         "exchange": policy["exchange"],
         "segment": policy["segment"],
-        "gtt_tradable": policy["gtt"],
+        "gtt_tradable": bool(policy["gtt"] and levels is not None),
         "product": policy["product"],
         "quantity_basis": size["quantity_basis"],
         "budget_inr": size["budget_inr"],
         "quantity": size["quantity"],
-        "entry": round(entry, 4),
-        "stop": round(stop, 4),
-        "target": round(target, 4),
+        "entry": None if entry is None else round(entry, 4),
+        "stop": None if stop is None else round(stop, 4),
+        "target": None if target is None else round(target, 4),
         "reward_r": REWARD_R,
         "last_close": round(last_close, 4),
         "rsi": round(rsi, 2),
         "atr": round(atr, 4),
         "relative_strength": round(strength, 4),
-        "volume_multiple": round(float(breakout["vol_multiple"]), 2),
+        "volume_multiple": round(volume_multiple, 2),
         "score": round(score, 2),
+        "screen_count": sum(1 for value in screens.values() if value),
+        "listed": bool(stock.get("listed") or on_crossover_list),
+        "screens": screens,
         "traps": traps,
         "desk": desk,
         "reason": reason,
@@ -224,6 +283,36 @@ def _rsi(closes: list[float]) -> Optional[float]:
     return 100 - (100 / (1 + relative))
 
 
+def _rsi_momentum(rsi: float, atr: float, last_close: float, strength: float) -> bool:
+    """The same RSI and ATR bands the ranker already scores in full."""
+    if last_close <= 0 or strength <= 0:
+        return False
+    atr_percent = atr / last_close
+    return 50 <= rsi <= 70 and 0.01 <= atr_percent <= 0.04
+
+
+def _levels(last_close: float, breakout: Optional[dict], closes: list[float]) -> Optional[tuple[float, float, float]]:
+    """Entry, stop, and 2R target. The breakout levels win. Otherwise the 50 SMA is the limit."""
+    if breakout is not None:
+        entry = float(breakout["midpoint"])
+        stop = float(breakout["breakout_low"]) * (1 - STOP_BUFFER)
+        if stop < entry < last_close:
+            target = entry + REWARD_R * (entry - stop)
+            if target > last_close:
+                return entry, stop, target
+    slow = simple_moving_average(closes, SMA_WINDOW)[-1]
+    if slow is None:
+        return None
+    entry = float(slow)
+    stop = entry * (1 - STOP_BUFFER)
+    if not stop < entry < last_close:
+        return None
+    target = entry + REWARD_R * (entry - stop)
+    if target <= last_close:
+        return None
+    return entry, stop, target
+
+
 def _relative_strength(closes: list[float]) -> float:
     if len(closes) <= EMA_WINDOW or closes[-EMA_WINDOW - 1] == 0:
         return 0.0
@@ -248,7 +337,7 @@ def _score(volume_multiple: float, rsi: float, atr_percent: float, strength: flo
     return volume_points + rsi_points + atr_points + strength_points
 
 
-def _traps(candles: list[dict], breakout: dict, rsi: float, atr: float) -> list[str]:
+def _traps(candles: list[dict], breakout: Optional[dict], rsi: float, atr: float) -> list[str]:
     found = []
     latest = candles[-1]
     true_range = max(
@@ -260,7 +349,7 @@ def _traps(candles: list[dict], breakout: dict, rsi: float, atr: float) -> list[
         found.append(f"RSI is {rsi:.1f}, which is a blow-off reading.")
     if true_range > BLOWOFF_ATR * atr:
         found.append("The last bar is wider than 2.5 ATR.")
-    if float(latest["close"]) < float(breakout["breakout_low"]):
+    if breakout is not None and float(latest["close"]) < float(breakout["breakout_low"]):
         found.append("The close is back under the breakout low.")
     return found
 
@@ -277,7 +366,7 @@ def _market_policy(exchange: str, instrument_type: str) -> dict:
     return {"exchange": market or "NSE", "segment": "unsupported", "gtt": False, "product": ""}
 
 
-def _desk(candles: list[dict], breakout: dict, entry: float, stop: float, target: float, atr: float, rsi: float, traps: list[str], volume_multiple: float) -> dict:
+def _desk(candles: list[dict], breakout: Optional[dict], entry: Optional[float], stop: Optional[float], target: Optional[float], atr: float, rsi: float, traps: list[str], volume_multiple: float, screens: dict, bearish: bool) -> dict:
     """Figures a risk desk can check. Missing history stays null."""
     closes = [float(item["close"]) for item in candles]
     highs = [float(item["high"]) for item in candles]
@@ -292,7 +381,7 @@ def _desk(candles: list[dict], breakout: dict, entry: float, stop: float, target
     close = float(last["close"])
     span = high - low
     close_location = 0.5 if span <= 0 else (close - low) / span
-    risk = entry - stop
+    risk = None if entry is None or stop is None else entry - stop
     up_volume = 0.0
     down_volume = 0.0
     start = max(1, len(closes) - PRICE_LOOKBACK)
@@ -311,9 +400,9 @@ def _desk(candles: list[dict], breakout: dict, entry: float, stop: float, target
         "sma200": _plain(sma_long),
         "trend_stack": ema is not None and sma is not None and close > ema > sma,
         "close_location": round(close_location, 4),
-        "risk_pct": round(risk / entry, 4) if entry else None,
-        "stop_in_atr": round(risk / atr, 4) if atr else None,
-        "room_r": round((target - close) / risk, 4) if risk else None,
+        "risk_pct": round(risk / entry, 4) if risk and entry else None,
+        "stop_in_atr": round(risk / atr, 4) if risk and atr else None,
+        "room_r": round((target - close) / risk, 4) if risk and target is not None else None,
         "atr_pct": round(atr / close, 4) if close else None,
         "rsi_five_sessions_ago": None if prior_rsi is None else round(prior_rsi, 2),
         "up_volume_20": round(up_volume, 2),
@@ -321,11 +410,12 @@ def _desk(candles: list[dict], breakout: dict, entry: float, stop: float, target
         "up_down_volume_ratio": None if down_volume <= 0 else round(up_volume / down_volume, 4),
         "average_volume_20": round(average_volume, 2),
         "distance_from_20d_high_pct": round((max(highs[-PRICE_LOOKBACK:]) - close) / close, 4) if close else None,
-        "breakout_low": round(float(breakout["breakout_low"]), 4),
-        "breakout_high": round(float(breakout["breakout_high"]), 4),
-        "days_since_breakout": breakout["days_since"],
-        "above_breakout_low": close >= float(breakout["breakout_low"]),
-        "higher_low": low > float(breakout["breakout_low"]),
+        "breakout_low": None if breakout is None else round(float(breakout["breakout_low"]), 4),
+        "breakout_high": None if breakout is None else round(float(breakout["breakout_high"]), 4),
+        "days_since_breakout": None if breakout is None else breakout["days_since"],
+        "above_breakout_low": True if breakout is None else close >= float(breakout["breakout_low"]),
+        "higher_low": None if breakout is None else low > float(breakout["breakout_low"]),
+        "screens": screens,
         "last_true_range_atr": round(true_range / atr, 4) if atr else None,
         "gap_pct": round((float(last["open"]) - previous_close) / previous_close, 4) if previous_close else None,
         "return_5": round(return_5, 4),
@@ -333,17 +423,26 @@ def _desk(candles: list[dict], breakout: dict, entry: float, stop: float, target
         "sessions": len(candles),
         "tape": [_tape_bar(bar) for bar in candles[-12:]],
     }
-    packet["book_call"] = _book_call(packet, traps, volume_multiple, rsi, entry, stop, target, close)
+    packet["book_call"] = _book_call(packet, traps, rsi, entry, stop, target, close, screens, bearish)
     return packet
 
 
-def _book_call(packet: dict, traps: list[str], volume_multiple: float, rsi: float, entry: float, stop: float, target: float, last_close: float) -> str:
+def _book_call(packet: dict, traps: list[str], rsi: float, entry: Optional[float], stop: Optional[float], target: Optional[float], last_close: float, screens: dict, bearish: bool) -> str:
     """Arithmetic only. The model confirms or vetoes this. It cannot invent the other side."""
     broken = bool(traps) or rsi >= RSI_TRAP or (packet["last_true_range_atr"] or 0) > BLOWOFF_ATR or not packet["above_breakout_low"]
     if broken:
         return "sell"
-    if stop < entry < last_close < target and volume_multiple >= 3 and rsi < RSI_TRAP:
+    if (
+        entry is not None
+        and stop is not None
+        and target is not None
+        and stop < entry < last_close < target
+        and rsi < RSI_TRAP
+        and any(screens.values())
+    ):
         return "buy"
+    if bearish:
+        return "sell"
     return "stand_aside"
 
 
@@ -376,10 +475,22 @@ def _order_size(policy: dict, entry: float) -> dict:
     return {"quantity_basis": "unsupported", "budget_inr": None, "quantity": None}
 
 
-def _reason(breakout: dict, cross_index: int, rsi: float, atr: float, strength: float, policy: dict, traps: list[str]) -> str:
-    text = (
-        f"{breakout['symbol']} retested the {breakout['breakout_date']} breakout. "
-        f"Volume was {float(breakout['vol_multiple']):.2f} times the prior 20-day average and the 20 EMA crossed above the 50 SMA. "
+def _reason(stock: dict, breakout: Optional[dict], screens: dict, rsi: float, atr: float, strength: float, policy: dict, traps: list[str]) -> str:
+    symbol = str(stock.get("symbol") or (breakout or {}).get("symbol") or "")
+    names = []
+    if screens.get("moving_average"):
+        names.append("the moving-average crossover list")
+    if screens.get("price_volume"):
+        names.append("the price and volume expansion list")
+    if screens.get("rsi_momentum_atr"):
+        names.append("the RSI momentum and ATR list")
+    text = f"{symbol} is on {' and '.join(names)}. "
+    if breakout is not None:
+        text += (
+            f"It retested the {breakout['breakout_date']} breakout. "
+            f"Volume was {float(breakout['vol_multiple']):.2f} times the prior 20-day average. "
+        )
+    text += (
         f"RSI {rsi:.1f}, ATR {atr:.2f}, 20-session return {strength:.1%}. "
         "Sector momentum is not scored because this feed has no sector map. "
         "Filings, news, and lawsuits are read through the research tools before the call."

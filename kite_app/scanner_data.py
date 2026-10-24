@@ -47,6 +47,18 @@ _OTHER_SERIES = frozenset({
 _universe_cache: Optional[tuple[float, list[dict]]] = None
 
 
+def cached_equity() -> list[dict]:
+    """Saved candles for every symbol already on the scanner cache."""
+    cached = _read_cache()
+    if not cached:
+        return []
+    stocks = []
+    for stock in cached.get("stocks") or []:
+        if isinstance(stock, dict) and stock.get("symbol") and stock.get("candles"):
+            stocks.append(stock)
+    return stocks
+
+
 def cache_path() -> Path:
     override = os.environ.get("SCANNER_CACHE_PATH", "").strip()
     if override:
@@ -65,7 +77,7 @@ def _regular_equity(symbol: str, company: str) -> bool:
 
 
 def equity_universe(kite) -> list[dict]:
-    """NSE equity shares. This is the Algo Signals universe."""
+    """NSE equity shares. This is the price-volume-expansion universe."""
     global _universe_cache
     now = time.monotonic()
     if _universe_cache and now - _universe_cache[0] < CACHE_SECONDS:

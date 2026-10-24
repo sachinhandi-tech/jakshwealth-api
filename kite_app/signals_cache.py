@@ -66,6 +66,49 @@ def _json_ready(candles: list[dict]) -> list[dict]:
     return ready
 
 
+def history_by_ticker(tickers: list[str]) -> list[dict]:
+    """Longest saved daily history for each ticker. A database miss returns nothing."""
+    names = []
+    seen = set()
+    for ticker in tickers:
+        name = str(ticker or "").upper()
+        if name and name not in seen:
+            seen.add(name)
+            names.append(name)
+    if not names:
+        return []
+    try:
+        from kite_app.models import get_sessionmaker
+
+        db = get_sessionmaker()()
+    except Exception:
+        return []
+    best: dict[str, dict] = {}
+    try:
+        rows = db.query(StockHistoryCache).filter(StockHistoryCache.ticker.in_(names)).all()
+        for row in rows:
+            try:
+                candles = json.loads(row.candles_json)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(candles, list) or not candles:
+                continue
+            current = best.get(row.ticker)
+            if current is None or len(candles) > len(current["candles"]):
+                best[row.ticker] = {
+                    "symbol": row.ticker,
+                    "company_name": row.ticker,
+                    "exchange": "NSE",
+                    "instrument_type": "EQ",
+                    "candles": candles,
+                }
+    except Exception:
+        return []
+    finally:
+        db.close()
+    return list(best.values())
+
+
 def get_cached_candles(
     db: Session,
     token: int,

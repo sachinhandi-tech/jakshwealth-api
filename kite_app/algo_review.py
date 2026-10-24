@@ -37,6 +37,8 @@ _INSTRUCTION = (
     "If a tool says the source is not connected or returned no text, that source was not read. "
     "Then work the book in this order: trend, participation, volatility, asymmetry, invalidation. "
     "Use the numbers in the payload, including the tape, and the tool text. "
+    "screens say whether this name is on the moving-average list, the price and volume list, or the RSI momentum and ATR list. "
+    "A false screen was not seen. "
     "book_call is the arithmetic. Confirm it or veto it. "
     "Do not call buy unless book_call is buy, every check passes, and all three sources were read. "
     "Do not call sell unless book_call is sell, invalidation fails, and all three sources were read. "
@@ -242,10 +244,9 @@ def _geometry(item: dict) -> bool:
         stop = float(item["stop"])
         target = float(item["target"])
         last_close = float(item["last_close"])
-        volume = float(item["volume_multiple"])
     except (KeyError, TypeError, ValueError):
         return False
-    return stop < entry < last_close < target and volume >= 3
+    return stop < entry < last_close < target
 
 
 def _finish(item: dict, decision: str, reason: str, checks: dict, tradable: bool, note: str) -> None:

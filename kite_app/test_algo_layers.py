@@ -1,6 +1,6 @@
 from datetime import date, timedelta
 
-from kite_app.algo_layers import backtest_symbol, select_setups, walk_exit
+from kite_app.algo_layers import backtest_symbol, combine_books, evaluate_stock, select_setups, walk_exit
 from kite_app.gtt_orders import arm_exit
 
 
@@ -54,6 +54,40 @@ def test_equity_retest_is_ranked_with_a_2r_target():
     assert setup["quantity"] == 1000
     assert setup["budget_inr"] == 100000
     assert "one lakh" in setup["reason"]
+    assert setup["screens"]["price_volume"] is True
+
+
+def test_moving_average_names_join_the_book_without_a_volume_breakout():
+    stock = _retest_stock("WIPRO")
+    for candle in stock["candles"]:
+        candle["volume"] = 1000
+    stock["on_moving_average_list"] = True
+    found = evaluate_stock(stock)
+    assert found is not None
+    assert found["screens"]["moving_average"] is True
+    assert found["screens"]["price_volume"] is False
+    assert "moving-average crossover list" in found["reason"]
+    assert "RSI" in found["reason"]
+    assert "ATR" in found["reason"]
+
+    flat = {
+        "symbol": "FLAT",
+        "company_name": "Flat Ltd",
+        "exchange": "NSE",
+        "instrument_type": "EQ",
+        "candles": _quiet(70),
+    }
+    assert evaluate_stock(flat) is None
+    merged = combine_books(
+        [stock],
+        [{"symbol": "TCS", "company_name": "TCS Ltd", "crossover_type": "bullish"}],
+        [{"symbol": "TCS", "company_name": "TCS Ltd", "candles": _quiet(70)}],
+    )
+    symbols = {item["symbol"] for item in merged}
+    assert symbols == {"WIPRO", "TCS"}
+    tcs = next(item for item in merged if item["symbol"] == "TCS")
+    assert tcs["on_moving_average_list"] is True
+    assert len(tcs["candles"]) == 70
 
 
 def _checks(**overrides):

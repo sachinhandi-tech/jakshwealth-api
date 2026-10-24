@@ -1,4 +1,4 @@
-"""Breakout and retest scan. Same rules as the desk Algo Signals scanner."""
+"""Breakout and retest scan. Same rules as the desk price-volume-expansion scanner."""
 
 from __future__ import annotations
 

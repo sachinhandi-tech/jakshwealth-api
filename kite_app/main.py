@@ -195,8 +195,15 @@ class SetupStock(BaseModel):
     candles: list[SetupCandle] = Field(default_factory=list)
 
 
+class SetupSignal(BaseModel):
+    symbol: str
+    company_name: str = ""
+    crossover_type: str = ""
+
+
 class SetupRequest(BaseModel):
     stocks: list[SetupStock] = Field(default_factory=list)
+    signals: list[SetupSignal] = Field(default_factory=list)
 
 
 def _auth_error(exc: KiteAuthError) -> HTTPException:
@@ -408,12 +415,19 @@ def algo_gtt_state(body: GttStateRequest) -> dict:
 
 @app.post("/api/kite/algo/setups")
 def algo_setups(body: SetupRequest) -> dict:
-    stocks = []
+    from kite_app.algo_layers import combine_books
+    from kite_app.scanner_data import cached_equity
+    from kite_app.signals_cache import history_by_ticker
+
+    posted = []
     for stock in body.stocks:
         item = stock.model_dump()
         item["candles"] = [candle.model_dump() for candle in stock.candles]
-        stocks.append(item)
-    return select_setups(stocks)
+        item["listed"] = True
+        posted.append(item)
+    signals = [signal.model_dump() for signal in body.signals]
+    remembered = history_by_ticker([signal.symbol for signal in body.signals]) if signals else []
+    return select_setups(combine_books(posted, signals, [*cached_equity(), *remembered]))
 
 
 @app.post("/api/algo-orders/arm-exit")
