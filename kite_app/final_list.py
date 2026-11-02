@@ -15,7 +15,7 @@ _RUNNING = False
 _WORKING = False
 _FINISHED = False
 _FOCUS = ""
-_BOOK = {"scanned": 0, "accepted": 0, "setups": [], "sell_calls": []}
+_BOOK = {"scanned": 0, "accepted": 0, "setups": [], "sell_calls": [], "vetoes": []}
 _REVIEWS: dict[str, dict] = {}
 _LAST_SCREEN = 0.0
 _LAST_COUNT = -1
@@ -92,6 +92,7 @@ def start_from_zero(record: Optional[dict], caps: Optional[list[str]] = None) ->
         _BOOK["accepted"] = 0
         _BOOK["setups"] = []
         _BOOK["sell_calls"] = []
+        _BOOK["vetoes"] = []
         _RUNNING = False
     # Clear coverage before any poll can relaunch against the previous mid/small list.
     try:
@@ -153,6 +154,7 @@ def public_snapshot() -> dict:
             "accepted": _BOOK["accepted"],
             "setups": [dict(item) for item in _BOOK["setups"]],
             "sell_calls": [dict(item) for item in _BOOK["sell_calls"]],
+            "vetoes": [dict(item) for item in _BOOK.get("vetoes") or []],
             "working": _WORKING,
             "paused": _paused(),
             "finished": _FINISHED,
@@ -163,9 +165,16 @@ def public_snapshot() -> dict:
     progress = _scan_progress()
     if focus and focus not in lines and "% remaining." not in focus and not _scan_chatter(focus):
         lines.append(focus)
-    if progress:
+    if progress and not book["finished"]:
         kept = [line for line in lines if not _scan_chatter(line) and "% remaining." not in line]
         kept.append(_count_line())
+        lines = kept
+    elif progress and book["finished"]:
+        # Keep the finished explanation above the meter copy so the desk shows the veto reason.
+        kept = [line for line in lines if not _scan_chatter(line)]
+        count = _count_line()
+        if count not in kept:
+            kept.append(count)
         lines = kept
     if not lines:
         lines = [_read_note()]
@@ -175,8 +184,11 @@ def public_snapshot() -> dict:
         activity.append({"text": text, "state": "active" if active else "done"})
     book["activity"] = activity
     book["progress"] = progress
-    # Keep the latest line even after the read finishes so the desk can explain an empty book.
-    book["universe_note"] = activity[-1]["text"] if activity else ""
+    # Prefer the finished focus / veto reason over the bare count line.
+    if focus and book["finished"]:
+        book["universe_note"] = focus
+    else:
+        book["universe_note"] = activity[-1]["text"] if activity else ""
     return book
 
 
@@ -527,6 +539,13 @@ def _handle_review(body: dict) -> None:
     buys = [str(item.get("symbol") or "") for item in rows if item.get("ai_decision") == "buy"]
     if buys:
         _set_focus(f"{', '.join(buys)} is approved and ready for a Zerodha buy GTT.")
+    else:
+        veto = next((item for item in rows if item.get("ai_reason")), None)
+        if veto:
+            _set_focus(
+                f"{veto.get('symbol')} passed every screen, but the model did not approve a buy. "
+                f"{veto.get('ai_reason')}"
+            )
     _finish_if_idle()
 
 
@@ -578,20 +597,29 @@ def _mark_seen(symbols: list[str]) -> None:
 
 
 def _remember_setups(rows: list[dict]) -> None:
-    """Merge reviewed buy/sell rows into the live book the desk shows."""
+    """Merge reviewed buy/sell/veto rows into the live book the desk shows."""
     with _LOCK:
         buys = {str(item.get("symbol") or ""): dict(item) for item in _BOOK["setups"]}
         sells = {str(item.get("symbol") or ""): dict(item) for item in _BOOK["sell_calls"]}
+        vetoes = {str(item.get("symbol") or ""): dict(item) for item in _BOOK.get("vetoes") or []}
         for item in rows:
             symbol = str(item.get("symbol") or "")
             if not symbol:
                 continue
-            if item.get("ai_decision") == "sell":
+            decision = str(item.get("ai_decision") or "")
+            if decision == "sell":
                 sells[symbol] = dict(item)
-            elif item.get("ai_decision") == "buy":
+                buys.pop(symbol, None)
+                vetoes.pop(symbol, None)
+            elif decision == "buy":
                 buys[symbol] = dict(item)
+                vetoes.pop(symbol, None)
+            elif decision in {"stand_aside", "unavailable"}:
+                vetoes[symbol] = dict(item)
+                buys.pop(symbol, None)
         _BOOK["setups"] = list(buys.values())[:5]
         _BOOK["sell_calls"] = list(sells.values())[:5]
+        _BOOK["vetoes"] = list(vetoes.values())[:5]
 
 
 def _reviews_pending() -> bool:
@@ -622,12 +650,21 @@ def _finished_note() -> str:
         screened = len(_SCREENED)
         accepted = int(_BOOK["accepted"] or 0)
         buys = len(_BOOK["setups"])
+        vetoes = [dict(item) for item in _BOOK.get("vetoes") or []]
     from kite_app.scanner_data import cap_segment_note
 
     universe = cap_segment_note()
     if buys:
         return f"The {universe} read is finished. {buys} approved buy{'s' if buys != 1 else ''} ready."
     if accepted:
+        veto = next((item for item in vetoes if item.get("ai_reason")), None)
+        if veto:
+            symbol = str(veto.get("symbol") or "A name")
+            reason = str(veto.get("ai_reason") or "").strip()
+            return (
+                f"The {universe} read is finished. {symbol} passed every screen, "
+                f"but the model did not approve a buy. {reason}"
+            )
         return (
             f"The {universe} read is finished. {accepted} name{'s' if accepted != 1 else ''} passed every screen, "
             "but the model did not approve a buy."

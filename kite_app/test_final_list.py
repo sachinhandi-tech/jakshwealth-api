@@ -110,6 +110,68 @@ def test_screening_shows_how_many_names_remain(monkeypatch):
         clear_activity()
 
 
+def test_review_keeps_model_veto_reason_for_the_desk(monkeypatch):
+    monkeypatch.setattr(final_list, "_REVIEW_QUEUED", {"INFY"})
+    monkeypatch.setattr(final_list, "_REVIEWS", {})
+    monkeypatch.setattr(final_list, "_SEEN", {"INFY"})
+    monkeypatch.setattr(final_list, "_SCREENED", {"INFY"})
+    monkeypatch.setattr(final_list, "_BOOK", {
+        "scanned": 1,
+        "accepted": 1,
+        "setups": [],
+        "sell_calls": [],
+        "vetoes": [],
+    })
+    monkeypatch.setattr(final_list, "_FINISHED", False)
+    monkeypatch.setattr(final_list, "_WORKING", True)
+    monkeypatch.setattr(final_list, "_load_stocks", lambda: [{
+        "symbol": "INFY",
+        "entry": 10,
+        "last_close": 12,
+        "gtt_tradable": True,
+        "reason": "ready",
+    }])
+    monkeypatch.setattr(
+        "kite_app.algo_layers.select_setups",
+        lambda stocks, review=False: {
+            "scanned": 1,
+            "accepted": 1,
+            "setups": [{
+                "symbol": "INFY",
+                "entry": 10,
+                "stop": 9,
+                "target": 14,
+                "last_close": 12,
+                "gtt_tradable": True,
+                "reason": "ready",
+                "desk": {"book_call": "buy"},
+            }],
+            "sell_calls": [],
+        },
+    )
+
+    def fake_review(setups, ask=None):
+        setups[0]["ai_decision"] = "stand_aside"
+        setups[0]["ai_reason"] = "Filings, news, and lawsuits were not all read, so there is no order."
+        setups[0]["gtt_tradable"] = False
+
+    monkeypatch.setattr("kite_app.algo_review.review_setups", fake_review)
+    monkeypatch.setattr("kite_app.scan_jobs.equity_work_pending", lambda: False)
+    monkeypatch.setattr("kite_app.scanner_data.filter_symbols_to_caps", lambda symbols, segments=None: list(symbols))
+
+    final_list._handle_review({"symbol": "INFY"})
+    snapshot = final_list.public_snapshot()
+
+    assert snapshot["setups"] == []
+    assert snapshot["vetoes"][0]["symbol"] == "INFY"
+    assert "Filings, news, and lawsuits were not all read" in snapshot["vetoes"][0]["ai_reason"]
+    assert snapshot["finished"] is True
+    joined = " ".join(line["text"] for line in snapshot["activity"])
+    assert "INFY" in joined
+    assert "did not approve a buy" in joined
+    assert "Filings, news, and lawsuits were not all read" in (snapshot["universe_note"] + " " + joined)
+
+
 def test_review_writes_approved_buys_into_the_book(monkeypatch):
     monkeypatch.setattr(final_list, "_REVIEW_QUEUED", {"INFY"})
     monkeypatch.setattr(final_list, "_REVIEWS", {})
