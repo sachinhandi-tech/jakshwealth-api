@@ -195,7 +195,15 @@ def scan_nifty100_parallel_cached(
     try:
         from kite_app.desk_progress import note_activity, scan_paused, current_generation
 
-        book_label = "Commodity futures" if book == "commodity_future" else "NSE equities"
+        if book == "commodity_future":
+            book_label = "Commodity futures"
+        else:
+            try:
+                from kite_app.scanner_data import cap_segment_note
+
+                book_label = cap_segment_note()
+            except Exception:
+                book_label = "NSE equities"
         generation = current_generation()
         if scan_all_nse:
             note_activity(f"Asking Zerodha for the {book_label} list.")

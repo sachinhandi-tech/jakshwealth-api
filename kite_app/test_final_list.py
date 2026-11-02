@@ -216,13 +216,32 @@ def test_live_book_count_is_not_replaced_by_the_old_cache():
         snap = final_list.public_snapshot()
         assert snap["progress"]["done"] == 400
         assert snap["progress"]["total"] == 500
-        assert snap["progress"]["label"] == "NSE equities"
+        assert "NSE" in snap["progress"]["label"]
         assert snap["progress"]["remaining_percent"] == 20
         assert all("6,554" not in line["text"] and "6554" not in line["text"] for line in snap["activity"])
         assert all("Starting NSE" not in line["text"] for line in snap["activity"])
         assert "400 of 500" in snap["activity"][-1]["text"]
     finally:
         clear_activity()
+
+
+def test_finished_read_keeps_screen_progress_not_price_scan(monkeypatch):
+    from kite_app.desk_progress import clear_activity, note_scan
+
+    clear_activity()
+    monkeypatch.setattr(final_list, "_FINISHED", True)
+    monkeypatch.setattr(final_list, "_WORKING", False)
+    note_scan("equity:price", 5, 495, 0, True)
+    note_scan("screen", 95, 100, 0, False, label="names", action="screened")
+    try:
+        snap = final_list.public_snapshot()
+        assert snap["progress"]["done"] == 95
+        assert snap["progress"]["total"] == 100
+        assert snap["progress"]["action"] == "screened"
+        assert all("495" not in line["text"] for line in snap["activity"])
+    finally:
+        clear_activity()
+        monkeypatch.setattr(final_list, "_FINISHED", False)
 
 
 def test_stop_holds_the_scan_until_continue(monkeypatch):

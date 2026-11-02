@@ -43,6 +43,29 @@ _PUBLIC_FIELDS = (
 
 
 _FILLING = False
+def _equity_scan_cap() -> int:
+    """Keep the price pass sized to the selected large/mid/small lists."""
+    try:
+        from kite_app.scanner_data import selected_cap_segments
+
+        chosen = set(selected_cap_segments())
+    except Exception:
+        return 600
+    if chosen == {"large"}:
+        return 120
+    if chosen == {"mid"}:
+        return 160
+    if chosen == {"small"}:
+        return 260
+    if chosen == {"large", "mid"}:
+        return 260
+    if chosen == {"large", "small"}:
+        return 360
+    if chosen == {"mid", "small"}:
+        return 420
+    return 600
+
+
 _BOOKS = (
     ("equity", 600),
 )
@@ -68,7 +91,8 @@ def ensure_listed_equity_scan(record: Optional[dict]) -> str:
         return ""
     note = _equity_note()
     try:
-        for book, cap in _BOOKS:
+        for book, _default_cap in _BOOKS:
+            cap = _equity_scan_cap() if book == "equity" else _default_cap
             if _book_running(book):
                 if _scan_is_live(book):
                     return note
@@ -84,8 +108,9 @@ def ensure_listed_equity_scan(record: Optional[dict]) -> str:
             params["short_window"] = 20
             params["short_type"] = "ema"
             from kite_app.desk_progress import note_activity
+            from kite_app.scanner_data import cap_segment_note
 
-            note_activity("Starting NSE equities.")
+            note_activity(f"Starting {cap_segment_note()}.")
             enqueue_scan(record, params)
             return note
     except Exception:
@@ -435,6 +460,11 @@ def run_scan_job(job_id: str) -> None:
         from kite_app.desk_progress import current_generation
 
         generation = current_generation()
+        if isinstance(params.get("caps"), list) and params.get("caps"):
+            from kite_app.scanner_data import set_cap_segments
+
+            # Apply the desk's chosen large/mid/small list on this worker before the universe loads.
+            set_cap_segments(params.get("caps"))
         
         # Use cached parallel scanner
         scan_all_nse = params.get("scan_all_nse", False)

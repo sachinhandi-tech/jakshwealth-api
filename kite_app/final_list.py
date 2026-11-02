@@ -238,12 +238,23 @@ def _universe_total(saved_count: int = 0) -> int:
         return saved_count
 
 
+def _equity_progress_label() -> str:
+    try:
+        from kite_app.scanner_data import cap_segment_note
+
+        return cap_segment_note()
+    except Exception:
+        return "NSE equities"
+
+
 def _progress_lines() -> list[str]:
     from kite_app.desk_progress import activity_status, scan_status
 
     lines = activity_status()
+    if _FINISHED:
+        return lines
     books = {
-        "equity": "NSE equities",
+        "equity": _equity_progress_label(),
         "commodity_future": "Commodity futures",
     }
     for mode, row in scan_status().items():
@@ -294,11 +305,12 @@ def _scan_progress() -> Optional[dict]:
     from kite_app.desk_progress import scan_status
 
     books = {
-        "equity": "NSE equities",
+        "equity": _equity_progress_label(),
         "commodity_future": "Commodity futures",
     }
     running_book = None
     running_screen = None
+    finished_screen = None
     chosen = None
     for mode, row in scan_status().items():
         total = int(row.get("total") or 0)
@@ -314,13 +326,18 @@ def _scan_progress() -> Optional[dict]:
             "remaining_percent": _remaining_percent(done, total),
         }
         chosen = payload
+        if mode == "screen":
+            finished_screen = payload
         if not row.get("running"):
             continue
         if mode == "screen":
             running_screen = payload
         elif running_book is None:
             running_book = payload
-    return running_book or running_screen or chosen
+    if _FINISHED:
+        # After the read ends, keep the screen total. Do not revive a leftover price-scan meter.
+        return finished_screen
+    return running_book or running_screen or finished_screen or chosen
 
 
 def _launch(record: dict) -> None:
@@ -584,8 +601,23 @@ def _finished_note() -> str:
 
 def _mark_finished(focus: str) -> None:
     global _FINISHED
+    from kite_app.desk_progress import note_scan, scan_status
+
     with _LOCK:
         _FINISHED = True
+    # Stop leftover price-scan meters so the desk does not show "5 of 495" after a finished large-cap read.
+    for mode, row in scan_status().items():
+        if mode == "screen" or not row.get("running"):
+            continue
+        note_scan(
+            mode,
+            int(row.get("done") or 0),
+            int(row.get("total") or 0),
+            int(row.get("signals") or 0),
+            False,
+            label=str(row.get("label") or ""),
+            action=str(row.get("action") or ""),
+        )
     _set_working(False, focus)
 
 
