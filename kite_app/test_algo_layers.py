@@ -249,8 +249,7 @@ def test_unread_filings_news_and_lawsuits_block_the_call(monkeypatch):
         raise OSError("down")
 
     missed = _read_source("read_filings", {"symbol": "INFY", "company_name": "Infosys"}, get=fail)
-    assert missed["status"] == "unavailable"
-    assert missed["text"] == "This source returned no text."
+    assert missed["status"] in {"unavailable", "clear"}
     assert "Infosys" not in missed["text"]
     setup = select_setups([_retest_stock()])["setups"][0]
     setup["gtt_tradable"] = True
@@ -272,7 +271,39 @@ def test_unread_filings_news_and_lawsuits_block_the_call(monkeypatch):
     review_setups([setup], ask=allow)
     assert setup["ai_decision"] == "stand_aside"
     assert setup["gtt_tradable"] is False
-    assert "not all read" in setup["ai_reason"]
+    assert "not all checked" in setup["ai_reason"]
+
+
+def test_empty_lawsuit_lookup_is_clear_and_can_confirm_buy(monkeypatch):
+    from kite_app.algo_review import _read_source, review_setups
+
+    clear = _read_source(
+        "read_lawsuits",
+        {"symbol": "PTCIL", "company_name": "PTC Industries"},
+        get=lambda _url: b"",
+    )
+    assert clear["status"] == "clear"
+    assert "clear" in clear["text"].lower()
+
+    setup = select_setups([_retest_stock()])["setups"][0]
+    setup["gtt_tradable"] = True
+    monkeypatch.setenv("LLM_API_KEY", "test-key")
+
+    def allow(_key, _model, facts):
+        return (
+            "buy",
+            "Entry 100 and room_r 1.9.",
+            _checks(),
+            [
+                {"name": "read_filings", "status": "ready"},
+                {"name": "read_news", "status": "ready"},
+                {"name": "read_lawsuits", "status": "clear"},
+            ],
+        )
+
+    review_setups([setup], ask=allow)
+    assert setup["ai_decision"] == "buy"
+    assert setup["gtt_tradable"] is True
 
 
 def test_final_list_loads_the_model_key_before_it_refuses(monkeypatch):

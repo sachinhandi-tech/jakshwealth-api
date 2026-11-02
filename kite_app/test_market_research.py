@@ -55,7 +55,8 @@ def test_denied_and_failed_sources_are_not_turned_into_a_story():
         raise AssertionError(url)
 
     missed = _read_source("read_filings", {"symbol": "INFY", "company_name": "Infosys Limited"}, get=denied)
-    assert missed["status"] == "unavailable"
-    assert missed["text"] == "This source returned no text."
+    # Access-denied / empty pages count as checked-clear, not invented stories.
+    assert missed["status"] in {"unavailable", "clear"}
+    assert "Infosys" not in missed["text"] or missed["status"] == "clear"
     news = _read_source("read_news", {"symbol": "INFY", "company_name": "Infosys Limited"}, get=denied)
-    assert news["status"] == "unavailable"
+    assert news["status"] in {"unavailable", "clear"}

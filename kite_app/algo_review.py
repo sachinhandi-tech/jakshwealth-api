@@ -42,14 +42,18 @@ _INSTRUCTION = (
     "You are the portfolio manager making the final buy, sell, or stand-aside call. "
     "Before the call, use read_filings, read_news, and read_lawsuits for this symbol. "
     "Use only the tool text for filings, news, and lawsuits. Do not invent filings, news, or lawsuits. "
-    "If a tool says the source is not connected or returned no text, that source was not read. "
+    "If a tool says the source is not connected or did not answer, that source failed. "
+    "If a tool says no items were found, that source was checked and is clear — treat it as read. "
     "Then work the book in this order: trend, participation, volatility, asymmetry, invalidation. "
     "Use the numbers in the payload, including the tape, and the tool text. "
+    "room_r is how many reward units (R) remain from the last close up to the target; "
+    "risk is entry minus stop, so room_r = (target - close) / (entry - stop). "
     "This name already passed the moving-average crossover, the price and volume expansion, and the RSI momentum and ATR screen. "
     "A false screen was not seen. "
     "book_call is the arithmetic. Confirm it or veto it. "
-    "Do not call buy unless book_call is buy, every check passes, and all three sources were read. "
-    "Do not call sell unless book_call is sell, invalidation fails, and all three sources were read. "
+    "Do not call buy unless book_call is buy, every check passes, and all three sources were checked "
+    "(ready text or an explicit clear/empty result). "
+    "Do not call sell unless book_call is sell, invalidation fails, and all three sources were checked. "
     "A missing 200-session average is not a pass. Do not invent it. "
     "A sell is a call only. It is not an order. "
     "After the tools, reply with JSON only: "
@@ -84,7 +88,14 @@ def review_setups(setups: list[dict], ask=None) -> list[dict]:
             continue
         decision, reason, checks = parsed
         if sources is not None and not _research_ready(sources):
-            _finish(item, "stand_aside", reason, checks, False, "Filings, news, and lawsuits were not all read, so there is no order.")
+            _finish(
+                item,
+                "stand_aside",
+                reason,
+                checks,
+                False,
+                "Filings, news, and lawsuits were not all checked (a source failed), so there is no order.",
+            )
             continue
         final, tradable, note = _resolve(item, decision, checks)
         _finish(item, final, reason, checks, tradable, note)
@@ -286,8 +297,19 @@ def _http_fault(exc: urllib.error.HTTPError) -> str:
     return f"HTTP {exc.code}"
 
 
+_CLEAR_TEXT = {
+    "read_filings": "No recent exchange/SEBI filings were found for this symbol. Source checked; clear.",
+    "read_news": "No recent news items were found for this symbol. Source checked; clear.",
+    "read_lawsuits": "No SEBI enforcement/lawsuit items were found for this symbol. Source checked; clear.",
+}
+
+
 def _read_source(name: str, facts: dict, get=None) -> dict:
-    """Return source text. A failed lookup does not invent a filing, a story, or a case."""
+    """Return source text. A failed lookup does not invent a filing, a story, or a case.
+
+    Empty successful lookups are status \"clear\" (checked, nothing found).
+    Transport/source failures stay \"unavailable\" and block confirmation.
+    """
     if name not in _TOOL_NAMES:
         return {"name": name, "status": "unavailable", "text": "This source is not connected."}
     try:
@@ -296,19 +318,21 @@ def _read_source(name: str, facts: dict, get=None) -> dict:
         return {"name": name, "status": "unavailable", "text": "This source did not answer."}
     cleaned = str(text or "").strip()
     if not cleaned:
-        return {"name": name, "status": "unavailable", "text": "This source returned no text."}
+        # Empty is often the normal small-cap case for lawsuits: searched, found nothing.
+        return {"name": name, "status": "clear", "text": _CLEAR_TEXT[name]}
     return {"name": name, "status": "ready", "text": cleaned[:8000]}
 
 
 def _research_ready(sources) -> bool:
+    """True when every research tool was checked (has content or an explicit clear)."""
     if not isinstance(sources, list):
         return False
-    ready = {
+    checked = {
         item.get("name")
         for item in sources
-        if isinstance(item, dict) and item.get("status") == "ready"
+        if isinstance(item, dict) and item.get("status") in {"ready", "clear"}
     }
-    return set(_TOOL_NAMES) <= ready
+    return set(_TOOL_NAMES) <= checked
 
 
 def _split(result) -> tuple:
