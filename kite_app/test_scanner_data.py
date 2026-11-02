@@ -24,6 +24,26 @@ class FakeKite:
         return {symbol: {"last_price": "101.5"} for symbol in symbols}
 
 
+def test_cap_segment_selection_limits_listed_symbols(monkeypatch):
+    from kite_app import scanner_data
+
+    monkeypatch.setattr(scanner_data, "_cap_cache", None)
+    monkeypatch.setattr(scanner_data, "_universe_cache", None)
+    books = {
+        scanner_data._CAP_SEGMENTS["large"]: {f"L{i}" for i in range(100)},
+        scanner_data._CAP_SEGMENTS["mid"]: {f"M{i}" for i in range(150)},
+        scanner_data._CAP_SEGMENTS["small"]: {f"S{i}" for i in range(250)},
+    }
+    monkeypatch.setattr(scanner_data, "_index_symbols", lambda urls: set(books[urls]))
+
+    assert scanner_data.set_cap_segments(["mid"]) == ["mid"]
+    assert scanner_data.listed_cap_symbols() == books[scanner_data._CAP_SEGMENTS["mid"]]
+    assert scanner_data.cap_segment_note() == "NSE mid cap"
+    assert scanner_data.set_cap_segments(["large", "small"]) == ["large", "small"]
+    assert scanner_data.listed_cap_symbols() == books[scanner_data._CAP_SEGMENTS["large"]] | books[scanner_data._CAP_SEGMENTS["small"]]
+    scanner_data.set_cap_segments(["large", "mid", "small"])
+
+
 def test_equity_universe_keeps_regular_shares_only(monkeypatch):
     class Instruments:
         def instruments(self, exchange):

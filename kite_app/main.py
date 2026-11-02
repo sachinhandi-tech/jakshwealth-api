@@ -222,6 +222,11 @@ class SetupSignal(BaseModel):
 class SetupRequest(BaseModel):
     stocks: list[SetupStock] = Field(default_factory=list)
     signals: list[SetupSignal] = Field(default_factory=list)
+    caps: list[str] = Field(default_factory=list)
+
+
+class ScanRestartRequest(BaseModel):
+    caps: list[str] = Field(default_factory=list)
 
 
 def _auth_error(exc: KiteAuthError) -> HTTPException:
@@ -472,7 +477,7 @@ def algo_scan_continue() -> dict:
 
 
 @app.post("/api/kite/algo/scan/restart")
-def algo_scan_restart() -> dict:
+def algo_scan_restart(body: ScanRestartRequest = ScanRestartRequest()) -> dict:
     """Clear this read and start again at the first NSE share."""
     from kite_app.final_list import start_from_zero
 
@@ -481,7 +486,7 @@ def algo_scan_restart() -> dict:
     except Exception:
         record = None
     try:
-        return start_from_zero(record)
+        return start_from_zero(record, caps=body.caps)
     except Exception:
         from kite_app.final_list import public_snapshot
 

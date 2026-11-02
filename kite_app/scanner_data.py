@@ -44,7 +44,7 @@ _OTHER_SERIES = frozenset({
     *(f"N{digit}" for digit in range(10)),
     *(f"N{letter}" for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ"),
 })
-_universe_cache: Optional[tuple[float, list[dict]]] = None
+_universe_cache: Optional[tuple[float, frozenset[str], list[dict]]] = None
 
 
 def cached_equity() -> list[dict]:
@@ -116,18 +116,19 @@ def equity_universe(kite) -> list[dict]:
 
 
 def trade_universe(kite) -> list[dict]:
-    """NSE large, mid, and small cap shares. Commodities, futures, and options are not included."""
+    """NSE shares from the selected large/mid/small cap lists. Commodities, futures, and options are not included."""
     global _universe_cache
     now = time.monotonic()
-    if _universe_cache and now - _universe_cache[0] < CACHE_SECONDS:
-        return _universe_cache[1]
+    selected = frozenset(selected_cap_segments())
+    if _universe_cache and now - _universe_cache[0] < CACHE_SECONDS and _universe_cache[1] == selected:
+        return list(_universe_cache[2])
     allowed = listed_cap_symbols()
     rows = [row for row in _cash_rows(kite) if row["ticker"] in allowed]
     if not rows:
-        raise SignalScanError("Kite returned no NSE large, mid, or small cap shares.")
+        raise SignalScanError(f"Kite returned no {cap_segment_note()} shares.")
     rows.sort(key=lambda row: (row["book"], row["ticker"]))
-    _universe_cache = (now, rows)
-    return rows
+    _universe_cache = (now, selected, rows)
+    return list(rows)
 
 
 def _cash_rows(kite) -> list[dict]:
@@ -197,37 +198,82 @@ def _front_expiry(rows: list[dict]) -> list[dict]:
     return [row for row in rows if row["expiry"] == nearest.get(row["company"])]
 
 
-_CAP_LISTS = (
-    (
+_CAP_SEGMENTS: dict[str, tuple[str, str]] = {
+    "large": (
         "https://www.niftyindices.com/IndexConstituent/ind_nifty100list.csv",
         "https://nsearchives.nseindia.com/content/indices/ind_nifty100list.csv",
     ),
-    (
+    "mid": (
         "https://www.niftyindices.com/IndexConstituent/ind_niftymidcap150list.csv",
         "https://nsearchives.nseindia.com/content/indices/ind_niftymidcap150list.csv",
     ),
-    (
+    "small": (
         "https://www.niftyindices.com/IndexConstituent/ind_niftysmallcap250list.csv",
         "https://nsearchives.nseindia.com/content/indices/ind_niftysmallcap250list.csv",
     ),
-)
-_cap_cache: Optional[tuple[float, set[str]]] = None
+}
+_CAP_LABELS = {
+    "large": "large cap",
+    "mid": "mid cap",
+    "small": "small cap",
+}
+_ALL_CAPS = ("large", "mid", "small")
+_selected_caps: frozenset[str] = frozenset(_ALL_CAPS)
+_cap_cache: Optional[tuple[float, frozenset[str], set[str]]] = None
+
+
+def normalize_cap_segments(segments: Optional[list[str]] = None) -> list[str]:
+    """Keep only known large/mid/small values. Empty input means all three."""
+    wanted = []
+    for item in segments or []:
+        key = str(item or "").strip().lower()
+        if key in _CAP_SEGMENTS and key not in wanted:
+            wanted.append(key)
+    return wanted or list(_ALL_CAPS)
+
+
+def set_cap_segments(segments: Optional[list[str]] = None) -> list[str]:
+    """Restrict the live equity universe to the chosen cap lists."""
+    global _selected_caps, _cap_cache, _universe_cache
+    chosen = normalize_cap_segments(segments)
+    _selected_caps = frozenset(chosen)
+    _cap_cache = None
+    _universe_cache = None
+    return chosen
+
+
+def selected_cap_segments() -> list[str]:
+    return [key for key in _ALL_CAPS if key in _selected_caps]
+
+
+def cap_segment_note(segments: Optional[list[str]] = None) -> str:
+    chosen = normalize_cap_segments(segments if segments is not None else selected_cap_segments())
+    if set(chosen) == set(_ALL_CAPS):
+        return "NSE large, mid, and small cap"
+    labels = [_CAP_LABELS[key] for key in chosen]
+    if len(labels) == 1:
+        return f"NSE {labels[0]}"
+    if len(labels) == 2:
+        return f"NSE {labels[0]} and {labels[1]}"
+    return f"NSE {', '.join(labels[:-1])}, and {labels[-1]}"
 
 
 def listed_cap_symbols() -> set[str]:
-    """NSE large, mid, and small cap symbols: Nifty 100, Midcap 150, and Smallcap 250."""
+    """NSE symbols for the selected cap lists: Nifty 100, Midcap 150, and/or Smallcap 250."""
     global _cap_cache
     now = time.monotonic()
-    if _cap_cache and now - _cap_cache[0] < CACHE_SECONDS:
-        return set(_cap_cache[1])
+    selected = frozenset(selected_cap_segments())
+    if _cap_cache and now - _cap_cache[0] < CACHE_SECONDS and _cap_cache[1] == selected:
+        return set(_cap_cache[2])
     found: set[str] = set()
-    for urls in _CAP_LISTS:
-        found.update(_index_symbols(urls))
-    if len(found) < 400:
-        if _cap_cache:
-            return set(_cap_cache[1])
-        raise SignalScanError("The large, mid, and small cap lists could not be loaded.")
-    _cap_cache = (now, found)
+    for key in selected:
+        found.update(_index_symbols(_CAP_SEGMENTS[key]))
+    minimum = 50 if len(selected) == 1 else 150 if len(selected) == 2 else 400
+    if len(found) < minimum:
+        if _cap_cache and _cap_cache[1] == selected:
+            return set(_cap_cache[2])
+        raise SignalScanError("The selected large, mid, or small cap lists could not be loaded.")
+    _cap_cache = (now, selected, found)
     return set(found)
 
 

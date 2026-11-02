@@ -42,10 +42,19 @@ _PUBLIC_FIELDS = (
 
 
 _FILLING = False
-_EQUITY_NOTE = "The backend is reading NSE large, mid, and small cap equities. A name appears in its list after it passes the moving-average crossover, the price and volume expansion, and the RSI momentum and ATR screen."
 _BOOKS = (
     ("equity", 600),
 )
+
+
+def _equity_note() -> str:
+    from kite_app.scanner_data import cap_segment_note
+
+    return (
+        f"The backend is reading {cap_segment_note()} equities. "
+        "A name appears in its list after it passes the moving-average crossover, "
+        "the price and volume expansion, and the RSI momentum and ATR screen."
+    )
 
 
 def ensure_listed_equity_scan(record: Optional[dict]) -> str:
@@ -56,16 +65,17 @@ def ensure_listed_equity_scan(record: Optional[dict]) -> str:
         return ""
     if not record or not record.get("api_key") or not record.get("access_token"):
         return ""
+    note = _equity_note()
     try:
         for book, cap in _BOOKS:
             if _book_running(book):
                 if _scan_is_live(book):
-                    return _EQUITY_NOTE
+                    return note
                 if _book_covered(book):
                     _release_stale_run(book, force=True)
                     continue
                 if not _release_stale_run(book):
-                    return _EQUITY_NOTE
+                    return note
             if _book_covered(book):
                 continue
             params = _book_params(book, "price", 200, 200, 120, cap)
@@ -76,7 +86,7 @@ def ensure_listed_equity_scan(record: Optional[dict]) -> str:
 
             note_activity("Starting NSE equities.")
             enqueue_scan(record, params)
-            return _EQUITY_NOTE
+            return note
     except Exception:
         logger.info("listed equity scan was not started")
         return ""

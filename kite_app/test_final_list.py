@@ -108,6 +108,73 @@ def test_screening_shows_how_many_names_remain(monkeypatch):
         clear_activity()
 
 
+def test_review_writes_approved_buys_into_the_book(monkeypatch):
+    monkeypatch.setattr(final_list, "_REVIEW_QUEUED", {"INFY"})
+    monkeypatch.setattr(final_list, "_REVIEWS", {})
+    monkeypatch.setattr(final_list, "_SEEN", {"INFY"})
+    monkeypatch.setattr(final_list, "_SCREENED", {"INFY"})
+    monkeypatch.setattr(final_list, "_BOOK", {"scanned": 1, "accepted": 1, "setups": [], "sell_calls": []})
+    monkeypatch.setattr(final_list, "_FINISHED", False)
+    monkeypatch.setattr(final_list, "_WORKING", True)
+    monkeypatch.setattr(final_list, "_load_stocks", lambda: [{
+        "symbol": "INFY",
+        "entry": 10,
+        "last_close": 12,
+        "gtt_tradable": True,
+        "reason": "ready",
+    }])
+    monkeypatch.setattr(
+        "kite_app.algo_layers.select_setups",
+        lambda stocks, review=False: {
+            "scanned": 1,
+            "accepted": 1,
+            "setups": [{
+                "symbol": "INFY",
+                "entry": 10,
+                "last_close": 12,
+                "gtt_tradable": True,
+                "reason": "ready",
+            }],
+            "sell_calls": [],
+        },
+    )
+
+    def fake_review(setups, ask=None):
+        setups[0]["ai_decision"] = "buy"
+        setups[0]["ai_reason"] = "Filings were clean."
+        setups[0]["gtt_tradable"] = True
+
+    monkeypatch.setattr("kite_app.algo_review.review_setups", fake_review)
+    monkeypatch.setattr("kite_app.scan_jobs.equity_work_pending", lambda: False)
+
+    final_list._handle_review({"symbol": "INFY"})
+    snapshot = final_list.public_snapshot()
+
+    assert snapshot["setups"][0]["symbol"] == "INFY"
+    assert snapshot["setups"][0]["ai_decision"] == "buy"
+    assert snapshot["working"] is False
+    assert snapshot["finished"] is True
+
+
+def test_finished_read_is_not_relaunched_on_poll(monkeypatch):
+    launched = []
+    monkeypatch.setattr(final_list, "_FINISHED", True)
+    monkeypatch.setattr(final_list, "_WORKING", False)
+    monkeypatch.setattr(final_list, "_SEEN", {"AAA"})
+    monkeypatch.setattr(final_list, "_SCREENED", {"AAA"})
+    monkeypatch.setattr(final_list, "_REVIEW_QUEUED", set())
+    monkeypatch.setattr(final_list, "_load_stocks", lambda: [{"symbol": "AAA"}])
+    monkeypatch.setattr("kite_app.scan_jobs.equity_work_pending", lambda: False)
+    monkeypatch.setattr(
+        "kite_app.equity_queue.enqueue_equity_pass",
+        lambda *args, **kwargs: launched.append(True) or True,
+    )
+
+    final_list._launch({"api_key": "k", "access_token": "t", "platform_user_id": "user"})
+
+    assert launched == []
+
+
 def test_live_book_count_is_not_replaced_by_the_old_cache():
     from kite_app.desk_progress import clear_activity, note_activity, note_scan
 

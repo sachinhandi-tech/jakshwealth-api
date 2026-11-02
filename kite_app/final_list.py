@@ -13,6 +13,7 @@ logger = logging.getLogger("kite_app.final_list")
 _LOCK = threading.Lock()
 _RUNNING = False
 _WORKING = False
+_FINISHED = False
 _FOCUS = ""
 _BOOK = {"scanned": 0, "accepted": 0, "setups": [], "sell_calls": []}
 _REVIEWS: dict[str, dict] = {}
@@ -27,9 +28,19 @@ _PASS_LIMIT = 80
 _SLICE = 250
 
 
-_LOGIN_NOTE = "Log in to Zerodha to read NSE large, mid, and small cap equities."
-_READ_NOTE = "Reading NSE large, mid, and small cap equities."
 _STOP_NOTE = "Scan stopped. Start from zero when you want a new read from the first name."
+
+
+def _login_note() -> str:
+    from kite_app.scanner_data import cap_segment_note
+
+    return f"Log in to Zerodha to read {cap_segment_note()} equities."
+
+
+def _read_note() -> str:
+    from kite_app.scanner_data import cap_segment_note
+
+    return f"Reading {cap_segment_note()} equities."
 
 
 def begin_final_list(record: Optional[dict], launch: bool = True) -> dict:
@@ -37,7 +48,7 @@ def begin_final_list(record: Optional[dict], launch: bool = True) -> dict:
     from kite_app.desk_progress import scan_paused
 
     if not record or not record.get("api_key") or not record.get("access_token"):
-        _set_working(False, _LOGIN_NOTE)
+        _set_working(False, _login_note())
         return public_snapshot()
     if scan_paused():
         _set_working(False, _FOCUS or _STOP_NOTE)
@@ -45,7 +56,7 @@ def begin_final_list(record: Optional[dict], launch: bool = True) -> dict:
     if launch:
         _launch(record)
     else:
-        _set_working(True, _FOCUS or _READ_NOTE)
+        _set_working(True, _FOCUS or _read_note())
     return public_snapshot()
 
 
@@ -58,25 +69,33 @@ def stop_scan() -> dict:
     return public_snapshot()
 
 
-def start_from_zero(record: Optional[dict]) -> dict:
+def start_from_zero(record: Optional[dict], caps: Optional[list[str]] = None) -> dict:
     """Drop this read's progress and start again at the first NSE share."""
-    global _LAST_COUNT, _RUNNING, _SEEN, _SCREENED
+    global _FINISHED, _LAST_COUNT, _RUNNING, _SEEN, _SCREENED, _REVIEW_QUEUED, _REVIEWS
     from kite_app.desk_progress import bump_generation, clear_activity, resume_scan
+    from kite_app.scanner_data import set_cap_segments
 
+    chosen = set_cap_segments(caps)
     if not record or not record.get("api_key") or not record.get("access_token"):
-        _set_working(False, _LOGIN_NOTE)
+        _set_working(False, _login_note())
         return public_snapshot()
     bump_generation()
     clear_activity()
     with _LOCK:
         _SEEN = set()
         _SCREENED = set()
+        _REVIEW_QUEUED = set()
+        _REVIEWS = {}
         _LAST_COUNT = -1
+        _FINISHED = False
         _BOOK["scanned"] = 0
         _BOOK["accepted"] = 0
+        _BOOK["setups"] = []
+        _BOOK["sell_calls"] = []
         _RUNNING = False
     resume_scan()
-    _set_working(True, "Starting again from the first NSE share.")
+    labels = ", ".join(chosen)
+    _set_working(True, f"Starting again from the first NSE share ({labels}).")
     snapshot = public_snapshot()
     threading.Thread(target=_begin_again, args=(record,), daemon=True).start()
     return snapshot
@@ -102,6 +121,8 @@ def continue_scan(record: Optional[dict]) -> dict:
 
 
 def public_snapshot() -> dict:
+    from kite_app.scanner_data import selected_cap_segments
+
     with _LOCK:
         book = {
             "scanned": _BOOK["scanned"],
@@ -110,6 +131,8 @@ def public_snapshot() -> dict:
             "sell_calls": [dict(item) for item in _BOOK["sell_calls"]],
             "working": _WORKING,
             "paused": _paused(),
+            "finished": _FINISHED,
+            "caps": selected_cap_segments(),
         }
         focus = _FOCUS
     lines = _progress_lines()
@@ -121,7 +144,7 @@ def public_snapshot() -> dict:
         kept.append(_count_line())
         lines = kept
     if not lines:
-        lines = [_READ_NOTE]
+        lines = [_read_note()]
     activity = []
     for index, text in enumerate(lines[-5:]):
         active = book["working"] and index == len(lines[-5:]) - 1
@@ -182,11 +205,17 @@ def _review_rows(rows: list[dict]) -> None:
 def _load_stocks() -> list[dict]:
     from kite_app.algo_layers import combine_books
     from kite_app.scan_jobs import latest_crossover_signals
+    from kite_app.scanner_data import listed_cap_symbols
     from kite_app.signals_cache import history_by_ticker
 
     signals = latest_crossover_signals()
     remembered = history_by_ticker([signal["symbol"] for signal in signals]) if signals else []
-    return combine_books([], signals, remembered)
+    stocks = combine_books([], signals, remembered)
+    try:
+        allowed = listed_cap_symbols()
+    except Exception:
+        return stocks
+    return [row for row in stocks if str(row.get("symbol") or "").upper() in allowed]
 
 
 def _progress_lines() -> list[str]:
@@ -276,6 +305,8 @@ def _scan_progress() -> Optional[dict]:
 
 def _launch(record: dict) -> None:
     global _RUNNING, _RECORD, _WORKING, _FOCUS
+    if _read_is_complete():
+        return
     user = str(record.get("platform_user_id") or "")
     if user:
         try:
@@ -290,9 +321,9 @@ def _launch(record: dict) -> None:
                 already = _WORKING
                 _WORKING = True
                 if not _FOCUS:
-                    _FOCUS = _READ_NOTE
+                    _FOCUS = _read_note()
             if not already:
-                _remember(_READ_NOTE)
+                _note_activity_line(_read_note())
             return
     with _LOCK:
         _RECORD = record
@@ -301,9 +332,9 @@ def _launch(record: dict) -> None:
         _RUNNING = True
         _WORKING = True
         if not _FOCUS:
-            _FOCUS = _READ_NOTE
+            _FOCUS = _read_note()
         focus = _FOCUS
-    _remember(focus)
+    _note_activity_line(focus)
     threading.Thread(target=_loop, daemon=True).start()
 
 
@@ -327,7 +358,7 @@ def _handle_pass(body: dict) -> None:
     wave = int(body.get("wave") or 0) + 1
     record = _session_for(user)
     if record is None:
-        _set_working(False, _LOGIN_NOTE)
+        _set_working(False, _login_note())
         return
     if wave > _PASS_LIMIT:
         _set_working(False, "The equity read is still going. Open Final list again to continue.")
@@ -352,7 +383,10 @@ def _handle_pass(body: dict) -> None:
         enqueue_equity_pass(user, delay_seconds=20, wave=wave)
         _set_working(True, _count_line())
         return
-    _set_working(False, "The equity read is finished.")
+    if _reviews_pending():
+        _set_working(True, "Reading filings, news, and lawsuits for names that passed every screen.")
+        return
+    _mark_finished("The equity read is finished.")
 
 
 def _handle_screen(body: dict) -> None:
@@ -380,7 +414,7 @@ def _handle_screen(body: dict) -> None:
     with _LOCK:
         _BOOK["scanned"] = int(_BOOK["scanned"]) + len(symbols)
         _BOOK["accepted"] = int(_BOOK["accepted"]) + int(book["accepted"])
-    _note_screen_progress(done)
+    _note_screen_progress(done, max(done, len(_saved_symbols())))
     _set_working(True, _count_line())
     if review_symbols:
         _set_focus(f"Queued {', '.join(review_symbols[:5])} for filings, news, and lawsuits.")
@@ -392,17 +426,26 @@ def _handle_review(body: dict) -> None:
         return
     stocks = [row for row in _load_stocks() if str(row.get("symbol") or "").upper() == symbol]
     if not stocks:
+        _REVIEW_QUEUED.discard(symbol)
         _set_focus(f"{symbol} is waiting for saved prices.")
+        _finish_if_idle()
         return
     from kite_app.algo_layers import select_setups
 
     book = select_setups(stocks, review=False)
     rows = [*book["setups"], *book["sell_calls"]]
     if not rows:
+        _REVIEW_QUEUED.discard(symbol)
+        _finish_if_idle()
         return
     _set_focus(f"Reading filings, news, and lawsuits for {symbol}.")
     _review_rows(rows)
-    _remember(rows)
+    _remember_setups(rows)
+    _REVIEW_QUEUED.discard(symbol)
+    buys = [str(item.get("symbol") or "") for item in rows if item.get("ai_decision") == "buy"]
+    if buys:
+        _set_focus(f"{', '.join(buys)} is approved and ready for a Zerodha buy GTT.")
+    _finish_if_idle()
 
 
 def _saved_symbols() -> list[str]:
@@ -452,7 +495,8 @@ def _mark_seen(symbols: list[str]) -> None:
     _SEEN.update(str(symbol).upper() for symbol in symbols if symbol)
 
 
-def _remember(rows: list[dict]) -> None:
+def _remember_setups(rows: list[dict]) -> None:
+    """Merge reviewed buy/sell rows into the live book the desk shows."""
     with _LOCK:
         buys = {str(item.get("symbol") or ""): dict(item) for item in _BOOK["setups"]}
         sells = {str(item.get("symbol") or ""): dict(item) for item in _BOOK["sell_calls"]}
@@ -466,6 +510,48 @@ def _remember(rows: list[dict]) -> None:
                 buys[symbol] = dict(item)
         _BOOK["setups"] = list(buys.values())[:5]
         _BOOK["sell_calls"] = list(sells.values())[:5]
+
+
+def _reviews_pending() -> bool:
+    with _LOCK:
+        reviewed = {
+            str(key).split("|", 1)[0].upper()
+            for key in _REVIEWS
+            if str(key).strip()
+        }
+        return any(symbol not in reviewed for symbol in _REVIEW_QUEUED)
+
+
+def _read_is_complete() -> bool:
+    with _LOCK:
+        if _FINISHED:
+            return True
+    try:
+        from kite_app.scan_jobs import equity_work_pending
+
+        pending = equity_work_pending()
+    except Exception:
+        pending = True
+    return (not pending) and (not _next_symbols()) and (not _reviews_pending()) and (not _WORKING)
+
+
+def _mark_finished(focus: str) -> None:
+    global _FINISHED
+    with _LOCK:
+        _FINISHED = True
+    _set_working(False, focus)
+
+
+def _finish_if_idle() -> None:
+    try:
+        from kite_app.scan_jobs import equity_work_pending
+
+        pending = equity_work_pending()
+    except Exception:
+        pending = True
+    if pending or _next_symbols() or _reviews_pending():
+        return
+    _mark_finished("The equity read is finished.")
 
 
 def _session_for(user_id: str) -> Optional[dict]:
@@ -555,8 +641,11 @@ def _loop() -> None:
                 logger.info("final list screen paused")
                 _set_focus("The screen paused. It will try again.")
             if not pending:
-                _set_working(False, "The equity read is finished.")
-                return
+                if _reviews_pending():
+                    _set_working(True, "Reading filings, news, and lawsuits for names that passed every screen.")
+                else:
+                    _mark_finished("The equity read is finished.")
+                    return
             time.sleep(5)
         _set_working(False, "The equity read is still going. Open Final list again to continue.")
     finally:
@@ -580,17 +669,17 @@ def _set_working(working: bool, focus: str) -> None:
     with _LOCK:
         _WORKING = working
         _FOCUS = focus
-    _remember(focus)
+    _note_activity_line(focus)
 
 
 def _set_focus(focus: str) -> None:
     global _FOCUS
     with _LOCK:
         _FOCUS = focus
-    _remember(focus)
+    _note_activity_line(focus)
 
 
-def _remember(focus: str) -> None:
+def _note_activity_line(focus: str) -> None:
     from kite_app.desk_progress import note_activity
 
     note_activity(focus)
