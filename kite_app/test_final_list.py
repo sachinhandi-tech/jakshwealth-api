@@ -73,6 +73,7 @@ def test_screening_shows_how_many_names_remain(monkeypatch):
     monkeypatch.setattr("kite_app.scan_jobs.ensure_listed_equity_scan", lambda record: None)
     monkeypatch.setattr("kite_app.scan_jobs.equity_work_pending", lambda: False)
     monkeypatch.setattr(final_list, "_universe_total", lambda saved_count=0: max(saved_count, 3))
+    monkeypatch.setattr("kite_app.scanner_data.filter_symbols_to_caps", lambda symbols, segments=None: list(symbols))
     monkeypatch.setattr("kite_app.equity_queue.enqueue_screen_batches", lambda user, symbols: len(symbols))
     monkeypatch.setattr("kite_app.equity_queue.enqueue_equity_pass", lambda *args, **kwargs: True)
     monkeypatch.setattr(
@@ -147,6 +148,7 @@ def test_review_writes_approved_buys_into_the_book(monkeypatch):
 
     monkeypatch.setattr("kite_app.algo_review.review_setups", fake_review)
     monkeypatch.setattr("kite_app.scan_jobs.equity_work_pending", lambda: False)
+    monkeypatch.setattr("kite_app.scanner_data.filter_symbols_to_caps", lambda symbols, segments=None: list(symbols))
 
     final_list._handle_review({"symbol": "INFY"})
     snapshot = final_list.public_snapshot()
@@ -181,6 +183,85 @@ def test_old_coverage_without_caps_does_not_count(monkeypatch):
         assert scan_jobs._book_covered("equity") is True
     finally:
         scan_jobs._LISTS.clear()
+        set_cap_segments(["large", "mid", "small"])
+
+
+def test_stale_queue_message_does_not_rewrite_small_only_caps(monkeypatch):
+    from kite_app.desk_progress import bump_generation, current_generation
+    from kite_app.scanner_data import selected_cap_segments, set_cap_segments
+
+    set_cap_segments(["small"])
+    bump_generation()
+    handled = []
+
+    monkeypatch.setattr(final_list, "_handle_pass", lambda body: handled.append(body))
+    monkeypatch.setattr(final_list, "_handle_screen", lambda body: handled.append(body))
+    monkeypatch.setattr(final_list, "_handle_review", lambda body: handled.append(body))
+
+    # Old large+small work from before Start from zero must be ignored.
+    final_list.handle_message({
+        "kind": "screen",
+        "symbols": ["AAA"],
+        "caps": ["large", "small"],
+        "generation": 0,
+    })
+    final_list.handle_message({
+        "kind": "screen",
+        "symbols": ["BBB"],
+        "caps": ["large", "small"],
+    })
+    # Same generation but a wider cap list must also be ignored.
+    final_list.handle_message({
+        "kind": "screen",
+        "symbols": ["CCC"],
+        "caps": ["large", "mid", "small"],
+        "generation": current_generation(),
+    })
+
+    assert handled == []
+    assert selected_cap_segments() == ["small"]
+    set_cap_segments(["large", "mid", "small"])
+
+
+def test_screen_handler_drops_symbols_outside_selected_caps(monkeypatch):
+    from kite_app.scanner_data import set_cap_segments
+
+    set_cap_segments(["large"])
+    monkeypatch.setattr(final_list, "_SEEN", set())
+    monkeypatch.setattr(final_list, "_SCREENED", set())
+    monkeypatch.setattr(final_list, "_REVIEW_QUEUED", set())
+    monkeypatch.setattr(final_list, "_REVIEWS", {})
+    monkeypatch.setattr(final_list, "_BOOK", {"scanned": 0, "accepted": 0, "setups": [], "sell_calls": []})
+    monkeypatch.setattr(
+        "kite_app.scanner_data.listed_cap_symbols",
+        lambda segments=None: {"RELIANCE", "TCS"},
+    )
+    monkeypatch.setattr(
+        final_list,
+        "_load_stocks",
+        lambda: [
+            {"symbol": "RELIANCE", "candles": [{"close": 1}]},
+            {"symbol": "MIDCO", "candles": [{"close": 1}]},
+        ],
+    )
+    monkeypatch.setattr(
+        "kite_app.algo_layers.select_setups",
+        lambda stocks, review=False: {
+            "scanned": len(stocks),
+            "accepted": 0,
+            "setups": [],
+            "sell_calls": [],
+        },
+    )
+    try:
+        final_list._handle_screen({
+            "symbols": ["RELIANCE", "MIDCO", "SMALLCO"],
+            "platform_user_id": "user",
+            "caps": ["large"],
+        })
+        assert final_list._SCREENED == {"RELIANCE"}
+        assert final_list._BOOK["scanned"] == 1
+    finally:
         set_cap_segments(["large", "mid", "small"])
 
 

@@ -28,10 +28,15 @@ def test_send_message_batch_splits_after_ten(monkeypatch):
 
 
 def test_screen_batch_queues_the_model_without_calling_it(monkeypatch):
+    from kite_app.desk_progress import current_generation
+    from kite_app.scanner_data import selected_cap_segments, set_cap_segments
+
+    set_cap_segments(["large", "mid", "small"])
     monkeypatch.setattr(final_list, "_load_stocks", lambda: [{"symbol": "INFY"}])
     monkeypatch.setattr(final_list, "_REVIEW_QUEUED", set())
     monkeypatch.setattr(final_list, "_REVIEWS", {})
     monkeypatch.setattr(final_list, "_BOOK", {"scanned": 0, "accepted": 0, "setups": [], "sell_calls": []})
+    monkeypatch.setattr("kite_app.scanner_data.filter_symbols_to_caps", lambda symbols, segments=None: list(symbols))
 
     def fake_select(stocks, limit=5, review=True):
         assert review is False
@@ -52,13 +57,21 @@ def test_screen_batch_queues_the_model_without_calling_it(monkeypatch):
     monkeypatch.setattr("kite_app.algo_layers.select_setups", fake_select)
     monkeypatch.setattr("kite_app.equity_queue.enqueue_reviews", fake_reviews)
 
-    final_list.handle_message({"kind": "screen", "platform_user_id": "user-1", "symbols": ["INFY"]})
+    final_list.handle_message({
+        "kind": "screen",
+        "platform_user_id": "user-1",
+        "symbols": ["INFY"],
+        "caps": selected_cap_segments(),
+        "generation": current_generation(),
+    })
 
     assert queued == ["INFY"]
     assert final_list.public_snapshot()["accepted"] == 1
 
 
 def test_queue_takes_the_place_of_the_local_loop(monkeypatch):
+    monkeypatch.setattr(final_list, "_FINISHED", False)
+    monkeypatch.setattr(final_list, "_WORKING", False)
     monkeypatch.setattr("kite_app.equity_queue.enqueue_equity_pass", lambda user, delay_seconds=0, wave=0: True)
 
     def boom(*args, **kwargs):
@@ -71,4 +84,4 @@ def test_queue_takes_the_place_of_the_local_loop(monkeypatch):
 
     assert snapshot["working"] is True
     assert "secret-token" not in str(snapshot)
-    assert any("Queued" in line["text"] for line in snapshot["activity"])
+    assert any("Reading" in line["text"] or "equities" in line["text"] for line in snapshot["activity"])

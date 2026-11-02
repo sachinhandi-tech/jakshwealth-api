@@ -120,6 +120,7 @@ def ensure_listed_equity_scan(record: Optional[dict]) -> str:
 
 
 def _book_params(book: str, scan_mode: str, long_window: int, trend_window: int, lookback_days: int, max_stocks: int) -> dict:
+    from kite_app.desk_progress import current_generation
     from kite_app.scanner_data import selected_cap_segments
 
     return {
@@ -135,6 +136,8 @@ def _book_params(book: str, scan_mode: str, long_window: int, trend_window: int,
         "max_stocks": max_stocks,
         "scan_all_nse": True,
         "caps": selected_cap_segments(),
+        # Stamp the desk generation so a stale large/mid job cannot rewrite a newer small-only choice.
+        "generation": current_generation(),
     }
 
 
@@ -198,7 +201,8 @@ def _covers_book(result: Optional[dict], book: str = "equity") -> bool:
             return False
         from kite_app.scanner_data import normalize_cap_segments, selected_cap_segments
 
-        if set(normalize_cap_segments(raw_caps)) != set(selected_cap_segments()):
+        result_caps = normalize_cap_segments(raw_caps, require=True)
+        if not result_caps or set(result_caps) != set(selected_cap_segments()):
             return False
     universe = int(result.get("universe") or 0)
     covered = int(result.get("scanned") or 0) + int(result.get("skipped") or 0)
@@ -404,18 +408,30 @@ def save_crossover_list(scan_mode: str, result: dict) -> None:
 
 
 def latest_crossover_signals() -> list[dict]:
-    """Symbols from the saved scans. The browser does not have to still be open."""
+    """Symbols from the saved scans for the currently selected caps only."""
+    from kite_app.scanner_data import listed_cap_symbols, normalize_cap_segments, selected_cap_segments
+
+    desk_caps = selected_cap_segments()
+    try:
+        allowed = {symbol.upper() for symbol in listed_cap_symbols(desk_caps)}
+    except Exception:
+        allowed = set()
     rows = []
     seen = set()
     saved = _stored_lists()
     for result in saved.values():
         if not result:
             continue
+        raw_caps = result.get("caps") if isinstance(result.get("caps"), list) else None
+        result_caps = normalize_cap_segments(raw_caps, require=True)
+        # Skip coverage saved under a different large/mid/small selection.
+        if not result_caps or set(result_caps) != set(desk_caps):
+            continue
         for signal in result.get("signals") or []:
             if not isinstance(signal, dict):
                 continue
             symbol = str(signal.get("ticker") or signal.get("symbol") or "").upper()
-            if not symbol or symbol in seen:
+            if not symbol or symbol in seen or (allowed and symbol not in allowed):
                 continue
             seen.add(symbol)
             rows.append({
@@ -458,18 +474,35 @@ def run_scan_job(job_id: str) -> None:
         kite.set_access_token(secret["access_token"])
         params = json.loads(row["request_json"])
         from kite_app.desk_progress import current_generation
+        from kite_app.scanner_data import (
+            listed_cap_symbols,
+            normalize_cap_segments,
+            selected_cap_segments,
+        )
 
         generation = current_generation()
-        if isinstance(params.get("caps"), list) and params.get("caps"):
-            from kite_app.scanner_data import set_cap_segments
-
-            # Apply the desk's chosen large/mid/small list on this worker before the universe loads.
-            set_cap_segments(params.get("caps"))
-        
-        # Use cached parallel scanner
+        job_generation = params.get("generation")
         scan_all_nse = params.get("scan_all_nse", False)
+        # Equity desk jobs must carry both generation and an explicit cap list.
+        if scan_all_nse and str(params.get("book") or "equity") == "equity":
+            if job_generation is None or int(job_generation) != generation:
+                _finish(job_id, "done", None, None)
+                return
+            job_caps = normalize_cap_segments(
+                params.get("caps") if isinstance(params.get("caps"), list) else None,
+                require=True,
+            )
+            desk_caps = selected_cap_segments()
+            if not job_caps or set(job_caps) != set(desk_caps):
+                _finish(job_id, "done", None, None)
+                return
+        else:
+            job_caps = selected_cap_segments()
+            if job_generation is not None and int(job_generation) != generation:
+                _finish(job_id, "done", None, None)
+                return
+
         budget = 1200 if params.get("full_pass") or scan_all_nse else 180
-        
         scan_params = {
             key: value
             for key, value in params.items()
@@ -488,16 +521,38 @@ def run_scan_job(job_id: str) -> None:
                 "full_pass",
             }
         }
-        result = scan_nifty100_parallel_cached(kite, budget_seconds=budget, **scan_params)
-        from kite_app.desk_progress import current_generation
+        # Pass the frozen job caps into the scanner so this worker cannot widen to other lists.
+        result = scan_nifty100_parallel_cached(
+            kite,
+            budget_seconds=budget,
+            caps=job_caps,
+            **scan_params,
+        )
 
         if current_generation() != generation:
             _finish(job_id, "done", None, None)
             return
         result["scan_all_nse"] = bool(scan_all_nse)
         result["full_pass"] = bool(params.get("full_pass"))
-        if isinstance(params.get("caps"), list):
-            result["caps"] = [str(item) for item in params.get("caps") if str(item).strip()]
+        result["caps"] = list(job_caps)
+        if scan_all_nse and str(params.get("book") or "equity") == "equity":
+            allowed = {symbol.upper() for symbol in listed_cap_symbols(job_caps)}
+            result["signals"] = [
+                signal for signal in (result.get("signals") or [])
+                if isinstance(signal, dict)
+                and str(signal.get("ticker") or signal.get("symbol") or "").upper() in allowed
+            ]
+            universe = int(result.get("universe") or 0)
+            # Guardrail: a large-only pass must not suddenly look like all three lists.
+            if set(job_caps) == {"large"} and universe > 130:
+                _finish(job_id, "error", None, "Large-cap scan loaded names outside Nifty 100.")
+                return
+            if set(job_caps) == {"mid"} and universe > 170:
+                _finish(job_id, "error", None, "Mid-cap scan loaded names outside Nifty Midcap 150.")
+                return
+            if set(job_caps) == {"small"} and universe > 280:
+                _finish(job_id, "error", None, "Small-cap scan loaded names outside Nifty Smallcap 250.")
+                return
         _finish(job_id, "done", json.dumps(result), None)
         save_crossover_list(str(params.get("scan_mode") or result.get("scan_mode") or ""), result)
         if result["full_pass"]:

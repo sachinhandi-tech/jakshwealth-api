@@ -116,12 +116,27 @@ def _begin_again(record: dict) -> None:
         logger.info("scan was not started")
 
 
-def _apply_message_caps(body: dict) -> None:
-    caps = body.get("caps")
-    if isinstance(caps, list) and caps:
-        from kite_app.scanner_data import set_cap_segments
+def _message_is_current(body: dict) -> bool:
+    """Drop equity-queue work from an older generation or a different cap selection."""
+    from kite_app.desk_progress import current_generation
+    from kite_app.scanner_data import normalize_cap_segments, selected_cap_segments
 
-        set_cap_segments(caps)
+    raw = body.get("generation")
+    if raw is None:
+        # Legacy messages without a generation stamp are ignored after a restart
+        # so they cannot rewrite the desk's large/mid/small selection.
+        return current_generation() == 0
+    try:
+        if int(raw) != current_generation():
+            return False
+    except (TypeError, ValueError):
+        return False
+    message_caps = normalize_cap_segments(
+        body.get("caps") if isinstance(body.get("caps"), list) else None,
+        require=True,
+    )
+    desk_caps = selected_cap_segments()
+    return bool(message_caps) and set(message_caps) == set(desk_caps)
 
 
 def continue_scan(record: Optional[dict]) -> dict:
@@ -215,14 +230,14 @@ def _review_rows(rows: list[dict]) -> None:
 def _load_stocks() -> list[dict]:
     from kite_app.algo_layers import combine_books
     from kite_app.scan_jobs import latest_crossover_signals
-    from kite_app.scanner_data import listed_cap_symbols
+    from kite_app.scanner_data import listed_cap_symbols, selected_cap_segments
     from kite_app.signals_cache import history_by_ticker
 
     signals = latest_crossover_signals()
     remembered = history_by_ticker([signal["symbol"] for signal in signals]) if signals else []
     stocks = combine_books([], signals, remembered)
     try:
-        allowed = {symbol.upper() for symbol in listed_cap_symbols()}
+        allowed = {symbol.upper() for symbol in listed_cap_symbols(selected_cap_segments())}
     except Exception:
         logger.info("selected cap lists were not loaded; screening waits for the chosen universe")
         return []
@@ -379,7 +394,9 @@ def handle_message(body: dict) -> None:
     """Run one queued batch. The caller deletes the message only after this returns."""
     if _paused():
         return
-    _apply_message_caps(body)
+    if not _message_is_current(body):
+        # Stale large/mid/small work must not mutate the current desk selection.
+        return
     kind = str(body.get("kind") or "")
     if kind == "equity_pass":
         _handle_pass(body)
@@ -431,7 +448,10 @@ def _handle_pass(body: dict) -> None:
 
 
 def _handle_screen(body: dict) -> None:
-    symbols = [str(symbol).upper() for symbol in body.get("symbols") or [] if str(symbol).strip()]
+    from kite_app.scanner_data import filter_symbols_to_caps
+
+    raw_symbols = [str(symbol).upper() for symbol in body.get("symbols") or [] if str(symbol).strip()]
+    symbols = filter_symbols_to_caps(raw_symbols)
     if not symbols:
         return
     wanted = set(symbols)
@@ -445,6 +465,7 @@ def _handle_screen(body: dict) -> None:
         symbol = str(item.get("symbol") or "")
         if symbol and _review_key(item) not in _REVIEWS and symbol not in _REVIEW_QUEUED:
             review_symbols.append(symbol)
+    review_symbols = filter_symbols_to_caps(review_symbols)
     if review_symbols and user:
         from kite_app.equity_queue import enqueue_reviews
 
@@ -462,8 +483,12 @@ def _handle_screen(body: dict) -> None:
 
 
 def _handle_review(body: dict) -> None:
+    from kite_app.scanner_data import filter_symbols_to_caps
+
     symbol = str(body.get("symbol") or "").upper()
-    if not symbol:
+    if not symbol or filter_symbols_to_caps([symbol]) != [symbol]:
+        _REVIEW_QUEUED.discard(symbol)
+        _finish_if_idle()
         return
     stocks = [row for row in _load_stocks() if str(row.get("symbol") or "").upper() == symbol]
     if not stocks:

@@ -115,19 +115,22 @@ def equity_universe(kite) -> list[dict]:
     return [row for row in trade_universe(kite) if row.get("book") == "equity"]
 
 
-def trade_universe(kite) -> list[dict]:
-    """NSE shares from the selected large/mid/small cap lists. Commodities, futures, and options are not included."""
+def trade_universe(kite, segments: Optional[list[str]] = None) -> list[dict]:
+    """NSE shares from the chosen large/mid/small cap lists. Commodities, futures, and options are not included."""
     global _universe_cache
     now = time.monotonic()
-    selected = frozenset(selected_cap_segments())
-    if _universe_cache and now - _universe_cache[0] < CACHE_SECONDS and _universe_cache[1] == selected:
+    selected = frozenset(normalize_cap_segments(segments if segments is not None else selected_cap_segments(), require=True))
+    if not selected:
+        selected = frozenset(selected_cap_segments())
+    if segments is None and _universe_cache and now - _universe_cache[0] < CACHE_SECONDS and _universe_cache[1] == selected:
         return list(_universe_cache[2])
-    allowed = listed_cap_symbols()
+    allowed = listed_cap_symbols(list(selected))
     rows = [row for row in _cash_rows(kite) if row["ticker"] in allowed]
     if not rows:
-        raise SignalScanError(f"Kite returned no {cap_segment_note()} shares.")
+        raise SignalScanError(f"Kite returned no {cap_segment_note(list(selected))} shares.")
     rows.sort(key=lambda row: (row["book"], row["ticker"]))
-    _universe_cache = (now, selected, rows)
+    if segments is None:
+        _universe_cache = (now, selected, rows)
     return list(rows)
 
 
@@ -221,16 +224,23 @@ _ALL_CAPS = ("large", "mid", "small")
 _CAPS_CACHE_KEY = "final_list:caps"
 _selected_caps: frozenset[str] = frozenset(_ALL_CAPS)
 _cap_cache: Optional[tuple[float, frozenset[str], set[str]]] = None
+_segment_cache: dict[str, tuple[float, set[str]]] = {}
 
 
-def normalize_cap_segments(segments: Optional[list[str]] = None) -> list[str]:
-    """Keep only known large/mid/small values. Empty input means all three."""
+def normalize_cap_segments(segments: Optional[list[str]] = None, *, require: bool = False) -> list[str]:
+    """Keep only known large/mid/small values.
+
+    Empty input means all three unless require=True, which keeps the list empty so
+    callers can reject unscoped jobs instead of silently expanding to every cap.
+    """
     wanted = []
     for item in segments or []:
         key = str(item or "").strip().lower()
         if key in _CAP_SEGMENTS and key not in wanted:
             wanted.append(key)
-    return wanted or list(_ALL_CAPS)
+    if wanted:
+        return wanted
+    return [] if require else list(_ALL_CAPS)
 
 
 def set_cap_segments(segments: Optional[list[str]] = None) -> list[str]:
@@ -257,11 +267,18 @@ def selected_cap_segments() -> list[str]:
         payload = cache_get(_CAPS_CACHE_KEY)
     except Exception:
         payload = None
-    if isinstance(payload, dict) and isinstance(payload.get("caps"), list):
-        chosen = normalize_cap_segments(payload.get("caps"))
-        _selected_caps = frozenset(chosen)
-        return chosen
+    if isinstance(payload, dict) and isinstance(payload.get("caps"), list) and payload.get("caps"):
+        chosen = normalize_cap_segments(payload.get("caps"), require=True)
+        if chosen:
+            _selected_caps = frozenset(chosen)
+            return chosen
     return [key for key in _ALL_CAPS if key in _selected_caps]
+
+
+def same_cap_segments(left: Optional[list[str]], right: Optional[list[str]]) -> bool:
+    return set(normalize_cap_segments(left, require=True)) == set(normalize_cap_segments(right, require=True)) and bool(
+        normalize_cap_segments(left, require=True)
+    )
 
 
 def cap_segment_note(segments: Optional[list[str]] = None) -> str:
@@ -276,23 +293,55 @@ def cap_segment_note(segments: Optional[list[str]] = None) -> str:
     return f"NSE {', '.join(labels[:-1])}, and {labels[-1]}"
 
 
-def listed_cap_symbols() -> set[str]:
-    """NSE symbols for the selected cap lists: Nifty 100, Midcap 150, and/or Smallcap 250."""
+def segment_symbols(segment: str) -> set[str]:
+    """Symbols for one cap list only. Never mixes large/mid/small."""
+    key = str(segment or "").strip().lower()
+    if key not in _CAP_SEGMENTS:
+        return set()
+    now = time.monotonic()
+    cached = _segment_cache.get(key)
+    if cached and now - cached[0] < CACHE_SECONDS:
+        return set(cached[1])
+    found = _index_symbols(_CAP_SEGMENTS[key])
+    if found:
+        _segment_cache[key] = (now, found)
+    return set(found)
+
+
+def listed_cap_symbols(segments: Optional[list[str]] = None) -> set[str]:
+    """NSE symbols for the chosen cap lists only: Nifty 100 / Midcap 150 / Smallcap 250."""
     global _cap_cache
     now = time.monotonic()
-    selected = frozenset(selected_cap_segments())
-    if _cap_cache and now - _cap_cache[0] < CACHE_SECONDS and _cap_cache[1] == selected:
+    selected = frozenset(normalize_cap_segments(segments if segments is not None else selected_cap_segments(), require=True))
+    if not selected:
+        selected = frozenset(selected_cap_segments())
+    if segments is None and _cap_cache and now - _cap_cache[0] < CACHE_SECONDS and _cap_cache[1] == selected:
         return set(_cap_cache[2])
     found: set[str] = set()
     for key in selected:
-        found.update(_index_symbols(_CAP_SEGMENTS[key]))
+        found.update(segment_symbols(key))
     minimum = 50 if len(selected) == 1 else 150 if len(selected) == 2 else 400
     if len(found) < minimum:
-        if _cap_cache and _cap_cache[1] == selected:
+        if segments is None and _cap_cache and _cap_cache[1] == selected:
             return set(_cap_cache[2])
         raise SignalScanError("The selected large, mid, or small cap lists could not be loaded.")
-    _cap_cache = (now, selected, found)
+    if segments is None:
+        _cap_cache = (now, selected, found)
     return set(found)
+
+
+def filter_symbols_to_caps(symbols: list[str], segments: Optional[list[str]] = None) -> list[str]:
+    """Drop any ticker that is outside the chosen large/mid/small lists."""
+    allowed = {symbol.upper() for symbol in listed_cap_symbols(segments)}
+    kept = []
+    seen: set[str] = set()
+    for raw in symbols:
+        symbol = str(raw or "").strip().upper()
+        if not symbol or symbol in seen or symbol not in allowed:
+            continue
+        seen.add(symbol)
+        kept.append(symbol)
+    return kept
 
 
 def _index_symbols(urls: tuple[str, str]) -> set[str]:

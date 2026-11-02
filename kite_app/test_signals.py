@@ -205,19 +205,27 @@ def test_saved_crossover_scans_are_read_without_the_open_browser(monkeypatch):
     scan_jobs._MEMORY.clear()
     scan_jobs._LISTS.clear()
     try:
+        caps = ["large", "mid", "small"]
+        monkeypatch.setattr(
+            "kite_app.scanner_data.listed_cap_symbols",
+            lambda segments=None: {"INFY", "TCS", "OLD"},
+        )
         scan_jobs._save_new("old-short", {"scan_mode": "crossover"}, "secret-token")
         scan_jobs._finish("old-short", "done", json.dumps({
             "scan_mode": "crossover",
+            "caps": caps,
             "signals": [{"ticker": "OLD", "company": "Old Ltd", "crossover_type": "bullish"}],
         }), None)
         scan_jobs._save_new("new-short", {"scan_mode": "crossover"}, "secret-token")
         scan_jobs._finish("new-short", "done", json.dumps({
             "scan_mode": "crossover",
+            "caps": caps,
             "signals": [{"ticker": "INFY", "company": "Infosys", "crossover_type": "bullish"}],
         }), None)
         scan_jobs._save_new("long", {"scan_mode": "price"}, "secret-token")
         scan_jobs._finish("long", "done", json.dumps({
             "scan_mode": "price",
+            "caps": caps,
             "signals": [{"ticker": "TCS", "company": "TCS Ltd", "crossover_type": "bearish"}],
         }), None)
         saved = scan_jobs.latest_crossover_scans()

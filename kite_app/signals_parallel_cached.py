@@ -182,6 +182,7 @@ def scan_nifty100_parallel_cached(
     budget_seconds: Optional[float] = None,
     book: str = "equity",
     full_pass: bool = False,
+    caps: Optional[list[str]] = None,
 ) -> dict:
     """Scan the chosen universe and keep only crosses inside the lookback."""
     start_time = time.monotonic()
@@ -190,6 +191,16 @@ def scan_nifty100_parallel_cached(
     scanned = 0
     signals: list[dict] = []
     progress_key = f"{book}:{scan_mode}" if scan_all_nse else scan_mode
+    from kite_app.scanner_data import (
+        cap_segment_note,
+        listed_cap_symbols,
+        normalize_cap_segments,
+        selected_cap_segments,
+    )
+
+    scan_caps = normalize_cap_segments(caps if caps is not None else selected_cap_segments(), require=True)
+    if not scan_caps:
+        scan_caps = selected_cap_segments()
 
     db = get_sessionmaker()()
     try:
@@ -198,19 +209,18 @@ def scan_nifty100_parallel_cached(
         if book == "commodity_future":
             book_label = "Commodity futures"
         else:
-            try:
-                from kite_app.scanner_data import cap_segment_note
-
-                book_label = cap_segment_note()
-            except Exception:
-                book_label = "NSE equities"
+            book_label = cap_segment_note(scan_caps)
         generation = current_generation()
         if scan_all_nse:
             note_activity(f"Asking Zerodha for the {book_label} list.")
             from kite_app.scanner_data import trade_universe
 
             wanted = book or "equity"
-            constituents = [row for row in trade_universe(kite) if row.get("book") == wanted]
+            allowed = {symbol.upper() for symbol in listed_cap_symbols(scan_caps)}
+            constituents = [
+                row for row in trade_universe(kite, segments=scan_caps)
+                if row.get("book") == wanted and str(row.get("ticker") or "").upper() in allowed
+            ]
         else:
             tokens = nse_equity_tokens(kite)
             constituents = [
@@ -229,6 +239,7 @@ def scan_nifty100_parallel_cached(
                     "signals": [],
                     "empty_book": True,
                     "scan_all_nse": True,
+                    "caps": scan_caps,
                 }
             raise SignalScanError("Could not load stock universe")
 
@@ -332,6 +343,12 @@ def scan_nifty100_parallel_cached(
         except Exception:
             cache_info = {"cached_stocks": 0, "total_candles": 0, "api_calls_saved": 0}
 
+        if scan_all_nse and scan_caps:
+            allowed = {symbol.upper() for symbol in listed_cap_symbols(scan_caps)}
+            signals = [
+                row for row in signals
+                if str(row.get("ticker") or row.get("symbol") or "").upper() in allowed
+            ]
         return {
             "scan_mode": str(scan_mode),
             "ma_type": str(ma_type),
@@ -349,6 +366,7 @@ def scan_nifty100_parallel_cached(
             "workers": int(MAX_WORKERS),
             "cache": cache_info,
             "book": book or "equity",
+            "caps": list(scan_caps),
         }
     except SignalScanError:
         raise

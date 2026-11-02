@@ -29,6 +29,7 @@ def test_cap_segment_selection_limits_listed_symbols(monkeypatch):
 
     monkeypatch.setattr(scanner_data, "_cap_cache", None)
     monkeypatch.setattr(scanner_data, "_universe_cache", None)
+    monkeypatch.setattr(scanner_data, "_segment_cache", {})
     books = {
         scanner_data._CAP_SEGMENTS["large"]: {f"L{i}" for i in range(100)},
         scanner_data._CAP_SEGMENTS["mid"]: {f"M{i}" for i in range(150)},
@@ -41,7 +42,49 @@ def test_cap_segment_selection_limits_listed_symbols(monkeypatch):
     assert scanner_data.cap_segment_note() == "NSE mid cap"
     assert scanner_data.set_cap_segments(["large", "small"]) == ["large", "small"]
     assert scanner_data.listed_cap_symbols() == books[scanner_data._CAP_SEGMENTS["large"]] | books[scanner_data._CAP_SEGMENTS["small"]]
+    # Explicit segments must not leak mid names into a large-only request.
+    large_only = scanner_data.listed_cap_symbols(["large"])
+    assert large_only == books[scanner_data._CAP_SEGMENTS["large"]]
+    assert not (large_only & books[scanner_data._CAP_SEGMENTS["mid"]])
+    assert not (large_only & books[scanner_data._CAP_SEGMENTS["small"]])
+    assert scanner_data.filter_symbols_to_caps(
+        ["L1", "M1", "S1"],
+        ["large"],
+    ) == ["L1"]
     scanner_data.set_cap_segments(["large", "mid", "small"])
+
+
+def test_latest_signals_ignore_other_cap_coverage(monkeypatch):
+    from kite_app import scan_jobs
+    from kite_app.scanner_data import set_cap_segments
+
+    set_cap_segments(["large"])
+    monkeypatch.setattr(
+        "kite_app.scanner_data.listed_cap_symbols",
+        lambda segments=None: {"RELIANCE", "TCS"},
+    )
+    scan_jobs._LISTS.clear()
+    scan_jobs._LISTS["long"] = {
+        "book": "equity",
+        "scan_all_nse": True,
+        "caps": ["mid"],
+        "signals": [{"symbol": "MIDCO", "company": "Mid"}],
+    }
+    scan_jobs._LISTS["short"] = {
+        "book": "equity",
+        "scan_all_nse": True,
+        "caps": ["large"],
+        "signals": [
+            {"symbol": "RELIANCE", "company": "Reliance"},
+            {"symbol": "MIDCO", "company": "Should Drop"},
+        ],
+    }
+    try:
+        rows = scan_jobs.latest_crossover_signals()
+        assert [row["symbol"] for row in rows] == ["RELIANCE"]
+    finally:
+        scan_jobs._LISTS.clear()
+        set_cap_segments(["large", "mid", "small"])
 
 
 def test_equity_universe_keeps_regular_shares_only(monkeypatch):
@@ -69,7 +112,7 @@ def test_equity_universe_keeps_regular_shares_only(monkeypatch):
     monkeypatch.setattr("kite_app.scanner_data._universe_cache", None)
     monkeypatch.setattr(
         "kite_app.scanner_data.listed_cap_symbols",
-        lambda: {"BAJAJ-AUTO", "INFY", "RELIANCE-BE", "TCS"},
+        lambda segments=None: {"BAJAJ-AUTO", "INFY", "RELIANCE-BE", "TCS"},
     )
     rows = equity_universe(Instruments())
 
@@ -111,7 +154,7 @@ def test_trade_universe_splits_shares_futures_options_and_commodities(monkeypatc
             return []
 
     monkeypatch.setattr("kite_app.scanner_data._universe_cache", None)
-    monkeypatch.setattr("kite_app.scanner_data.listed_cap_symbols", lambda: {"RELIANCE", "GOLD"})
+    monkeypatch.setattr("kite_app.scanner_data.listed_cap_symbols", lambda segments=None: {"RELIANCE", "GOLD"})
     from kite_app.scanner_data import trade_universe
 
     rows = trade_universe(Instruments())
