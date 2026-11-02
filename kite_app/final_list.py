@@ -244,13 +244,29 @@ def _load_stocks() -> list[dict]:
     return [row for row in stocks if str(row.get("symbol") or "").upper() in allowed]
 
 
-def _universe_total(saved_count: int = 0) -> int:
-    try:
-        from kite_app.scanner_data import listed_cap_symbols
+def _screen_total(saved_count: int = 0) -> int:
+    """Denominator for the screen meter.
 
-        return max(saved_count, len(listed_cap_symbols()))
+    While prices are still loading, aim at the full selected cap list.
+    Once the equity pass is idle, only names that actually became screenable
+    count — otherwise the desk sits forever at e.g. 217/247 with 12% left.
+    """
+    screened = len(_SCREENED)
+    baseline = max(int(saved_count), screened)
+    try:
+        from kite_app.scan_jobs import equity_work_pending
+
+        pending = equity_work_pending()
     except Exception:
-        return saved_count
+        pending = False
+    if not pending:
+        return max(baseline, 1) if baseline else 0
+    try:
+        from kite_app.scanner_data import listed_cap_symbols, selected_cap_segments
+
+        return max(baseline, len(listed_cap_symbols(selected_cap_segments())))
+    except Exception:
+        return baseline
 
 
 def _equity_progress_label() -> str:
@@ -431,12 +447,12 @@ def _handle_pass(body: dict) -> None:
             raise RuntimeError("screen batches were not queued")
         _mark_seen(symbols)
         enqueue_equity_pass(user, delay_seconds=15, wave=wave)
-        _note_screen_progress(len(_SCREENED), _universe_total(len(saved)))
+        _note_screen_progress(len(_SCREENED), _screen_total(len(saved)))
         _set_working(True, _count_line())
         return
     if equity_work_pending():
         enqueue_equity_pass(user, delay_seconds=20, wave=wave)
-        total = _universe_total(len(saved))
+        total = _screen_total(len(saved))
         if total:
             _note_screen_progress(len(_SCREENED), total)
         _set_working(True, _count_line() if total else "Waiting for the selected large/mid/small cap prices.")
@@ -476,7 +492,7 @@ def _handle_screen(body: dict) -> None:
     with _LOCK:
         _BOOK["scanned"] = int(_BOOK["scanned"]) + len(symbols)
         _BOOK["accepted"] = int(_BOOK["accepted"]) + int(book["accepted"])
-    _note_screen_progress(done, _universe_total(max(done, len(_saved_symbols()))))
+    _note_screen_progress(done, _screen_total(max(done, len(_saved_symbols()))))
     _set_working(True, _count_line())
     if review_symbols:
         _set_focus(f"Queued {', '.join(review_symbols[:5])} for filings, news, and lawsuits.")
@@ -630,6 +646,10 @@ def _mark_finished(focus: str) -> None:
 
     with _LOCK:
         _FINISHED = True
+        screened = len(_SCREENED)
+    # Snap the screen meter to 100% so a finished read never sits at "12% remaining".
+    if screened > 0:
+        note_scan("screen", screened, screened, 0, False, label="names", action="screened")
     # Stop leftover price-scan meters so the desk does not show "5 of 495" after a finished large-cap read.
     for mode, row in scan_status().items():
         if mode == "screen" or not row.get("running"):

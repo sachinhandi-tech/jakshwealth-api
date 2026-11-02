@@ -72,7 +72,7 @@ def test_screening_shows_how_many_names_remain(monkeypatch):
     )
     monkeypatch.setattr("kite_app.scan_jobs.ensure_listed_equity_scan", lambda record: None)
     monkeypatch.setattr("kite_app.scan_jobs.equity_work_pending", lambda: False)
-    monkeypatch.setattr(final_list, "_universe_total", lambda saved_count=0: max(saved_count, 3))
+    monkeypatch.setattr(final_list, "_screen_total", lambda saved_count=0: max(saved_count, 3))
     monkeypatch.setattr("kite_app.scanner_data.filter_symbols_to_caps", lambda symbols, segments=None: list(symbols))
     monkeypatch.setattr("kite_app.equity_queue.enqueue_screen_batches", lambda user, symbols: len(symbols))
     monkeypatch.setattr("kite_app.equity_queue.enqueue_equity_pass", lambda *args, **kwargs: True)
@@ -323,6 +323,29 @@ def test_finished_read_keeps_screen_progress_not_price_scan(monkeypatch):
     finally:
         clear_activity()
         monkeypatch.setattr(final_list, "_FINISHED", False)
+
+
+def test_mark_finished_snaps_incomplete_screen_meter_to_complete(monkeypatch):
+    from kite_app.desk_progress import clear_activity, note_scan
+
+    clear_activity()
+    monkeypatch.setattr(final_list, "_FINISHED", False)
+    monkeypatch.setattr(final_list, "_WORKING", True)
+    monkeypatch.setattr(final_list, "_SCREENED", {f"S{i}" for i in range(217)})
+    monkeypatch.setattr(final_list, "_BOOK", {"scanned": 217, "accepted": 0, "setups": [], "sell_calls": []})
+    note_scan("screen", 217, 247, 0, True, label="names", action="screened")
+    try:
+        final_list._mark_finished("The NSE small cap read is finished.")
+        snap = final_list.public_snapshot()
+        assert snap["finished"] is True
+        assert snap["working"] is False
+        assert snap["progress"]["done"] == 217
+        assert snap["progress"]["total"] == 217
+        assert snap["progress"]["remaining_percent"] == 0
+    finally:
+        clear_activity()
+        monkeypatch.setattr(final_list, "_FINISHED", False)
+        monkeypatch.setattr(final_list, "_SCREENED", set())
 
 
 def test_stop_holds_the_scan_until_continue(monkeypatch):
