@@ -72,6 +72,7 @@ def test_screening_shows_how_many_names_remain(monkeypatch):
     )
     monkeypatch.setattr("kite_app.scan_jobs.ensure_listed_equity_scan", lambda record: None)
     monkeypatch.setattr("kite_app.scan_jobs.equity_work_pending", lambda: False)
+    monkeypatch.setattr(final_list, "_universe_total", lambda saved_count=0: max(saved_count, 3))
     monkeypatch.setattr("kite_app.equity_queue.enqueue_screen_batches", lambda user, symbols: len(symbols))
     monkeypatch.setattr("kite_app.equity_queue.enqueue_equity_pass", lambda *args, **kwargs: True)
     monkeypatch.setattr(
@@ -154,6 +155,33 @@ def test_review_writes_approved_buys_into_the_book(monkeypatch):
     assert snapshot["setups"][0]["ai_decision"] == "buy"
     assert snapshot["working"] is False
     assert snapshot["finished"] is True
+
+
+def test_old_coverage_without_caps_does_not_count(monkeypatch):
+    from kite_app import scan_jobs
+    from kite_app.scanner_data import set_cap_segments
+
+    set_cap_segments(["large"])
+    covered = {
+        "book": "equity",
+        "scan_all_nse": True,
+        "universe": 150,
+        "scanned": 150,
+        "skipped": 0,
+        "signals": [{"symbol": "AAA"}],
+    }
+    scan_jobs._LISTS.clear()
+    scan_jobs._LISTS["short"] = dict(covered)
+    scan_jobs._LISTS["long"] = dict(covered)
+    try:
+        assert scan_jobs._book_covered("equity") is False
+        covered["caps"] = ["large"]
+        scan_jobs._LISTS["short"] = dict(covered)
+        scan_jobs._LISTS["long"] = dict(covered)
+        assert scan_jobs._book_covered("equity") is True
+    finally:
+        scan_jobs._LISTS.clear()
+        set_cap_segments(["large", "mid", "small"])
 
 
 def test_finished_read_is_not_relaunched_on_poll(monkeypatch):

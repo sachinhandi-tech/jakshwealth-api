@@ -93,6 +93,13 @@ def start_from_zero(record: Optional[dict], caps: Optional[list[str]] = None) ->
         _BOOK["setups"] = []
         _BOOK["sell_calls"] = []
         _RUNNING = False
+    # Clear coverage before any poll can relaunch against the previous mid/small list.
+    try:
+        from kite_app.scan_jobs import forget_saved_scans
+
+        forget_saved_scans()
+    except Exception:
+        logger.info("saved scan coverage was not cleared")
     resume_scan()
     labels = ", ".join(chosen)
     _set_working(True, f"Starting again from the first NSE share ({labels}).")
@@ -102,17 +109,19 @@ def start_from_zero(record: Optional[dict], caps: Optional[list[str]] = None) ->
 
 
 def _begin_again(record: dict) -> None:
-    """Clear saved coverage, then start the read. Kept off the web request so the gateway does not time out."""
-    try:
-        from kite_app.scan_jobs import forget_saved_scans
-
-        forget_saved_scans()
-    except Exception:
-        logger.info("saved scan coverage was not cleared")
+    """Start the read after coverage was cleared on the request thread."""
     try:
         _launch(record)
     except Exception:
         logger.info("scan was not started")
+
+
+def _apply_message_caps(body: dict) -> None:
+    caps = body.get("caps")
+    if isinstance(caps, list) and caps:
+        from kite_app.scanner_data import set_cap_segments
+
+        set_cap_segments(caps)
 
 
 def continue_scan(record: Optional[dict]) -> dict:
@@ -151,7 +160,8 @@ def public_snapshot() -> dict:
         activity.append({"text": text, "state": "active" if active else "done"})
     book["activity"] = activity
     book["progress"] = progress
-    book["universe_note"] = activity[-1]["text"] if book["working"] else ""
+    # Keep the latest line even after the read finishes so the desk can explain an empty book.
+    book["universe_note"] = activity[-1]["text"] if activity else ""
     return book
 
 
@@ -212,10 +222,20 @@ def _load_stocks() -> list[dict]:
     remembered = history_by_ticker([signal["symbol"] for signal in signals]) if signals else []
     stocks = combine_books([], signals, remembered)
     try:
-        allowed = listed_cap_symbols()
+        allowed = {symbol.upper() for symbol in listed_cap_symbols()}
     except Exception:
-        return stocks
+        logger.info("selected cap lists were not loaded; screening waits for the chosen universe")
+        return []
     return [row for row in stocks if str(row.get("symbol") or "").upper() in allowed]
+
+
+def _universe_total(saved_count: int = 0) -> int:
+    try:
+        from kite_app.scanner_data import listed_cap_symbols
+
+        return max(saved_count, len(listed_cap_symbols()))
+    except Exception:
+        return saved_count
 
 
 def _progress_lines() -> list[str]:
@@ -342,6 +362,7 @@ def handle_message(body: dict) -> None:
     """Run one queued batch. The caller deletes the message only after this returns."""
     if _paused():
         return
+    _apply_message_caps(body)
     kind = str(body.get("kind") or "")
     if kind == "equity_pass":
         _handle_pass(body)
@@ -376,17 +397,20 @@ def _handle_pass(body: dict) -> None:
             raise RuntimeError("screen batches were not queued")
         _mark_seen(symbols)
         enqueue_equity_pass(user, delay_seconds=15, wave=wave)
-        _note_screen_progress(len(_SCREENED), len(saved))
+        _note_screen_progress(len(_SCREENED), _universe_total(len(saved)))
         _set_working(True, _count_line())
         return
     if equity_work_pending():
         enqueue_equity_pass(user, delay_seconds=20, wave=wave)
-        _set_working(True, _count_line())
+        total = _universe_total(len(saved))
+        if total:
+            _note_screen_progress(len(_SCREENED), total)
+        _set_working(True, _count_line() if total else "Waiting for the selected large/mid/small cap prices.")
         return
     if _reviews_pending():
         _set_working(True, "Reading filings, news, and lawsuits for names that passed every screen.")
         return
-    _mark_finished("The equity read is finished.")
+    _mark_finished(_finished_note())
 
 
 def _handle_screen(body: dict) -> None:
@@ -414,7 +438,7 @@ def _handle_screen(body: dict) -> None:
     with _LOCK:
         _BOOK["scanned"] = int(_BOOK["scanned"]) + len(symbols)
         _BOOK["accepted"] = int(_BOOK["accepted"]) + int(book["accepted"])
-    _note_screen_progress(done, max(done, len(_saved_symbols())))
+    _note_screen_progress(done, _universe_total(max(done, len(_saved_symbols()))))
     _set_working(True, _count_line())
     if review_symbols:
         _set_focus(f"Queued {', '.join(review_symbols[:5])} for filings, news, and lawsuits.")
@@ -535,6 +559,29 @@ def _read_is_complete() -> bool:
     return (not pending) and (not _next_symbols()) and (not _reviews_pending()) and (not _WORKING)
 
 
+def _finished_note() -> str:
+    with _LOCK:
+        screened = len(_SCREENED)
+        accepted = int(_BOOK["accepted"] or 0)
+        buys = len(_BOOK["setups"])
+    from kite_app.scanner_data import cap_segment_note
+
+    universe = cap_segment_note()
+    if buys:
+        return f"The {universe} read is finished. {buys} approved buy{'s' if buys != 1 else ''} ready."
+    if accepted:
+        return (
+            f"The {universe} read is finished. {accepted} name{'s' if accepted != 1 else ''} passed every screen, "
+            "but the model did not approve a buy."
+        )
+    if screened:
+        return (
+            f"The {universe} read is finished. None of the {screened} screened names passed "
+            "price/volume, risk/momentum, and the model screens together."
+        )
+    return f"The {universe} read is finished. No names were ready to screen yet."
+
+
 def _mark_finished(focus: str) -> None:
     global _FINISHED
     with _LOCK:
@@ -551,7 +598,7 @@ def _finish_if_idle() -> None:
         pending = True
     if pending or _next_symbols() or _reviews_pending():
         return
-    _mark_finished("The equity read is finished.")
+    _mark_finished(_finished_note())
 
 
 def _session_for(user_id: str) -> Optional[dict]:
@@ -644,7 +691,7 @@ def _loop() -> None:
                 if _reviews_pending():
                     _set_working(True, "Reading filings, news, and lawsuits for names that passed every screen.")
                 else:
-                    _mark_finished("The equity read is finished.")
+                    _mark_finished(_finished_note())
                     return
             time.sleep(5)
         _set_working(False, "The equity read is still going. Open Final list again to continue.")

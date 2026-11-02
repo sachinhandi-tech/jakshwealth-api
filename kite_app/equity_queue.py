@@ -41,17 +41,37 @@ def queue_url(client=None) -> str:
     return _URL
 
 
+def _current_caps() -> list[str]:
+    try:
+        from kite_app.scanner_data import selected_cap_segments
+
+        return selected_cap_segments()
+    except Exception:
+        return []
+
+
 def enqueue_equity_pass(platform_user_id: str, delay_seconds: int = 0, wave: int = 0) -> bool:
-    body = {"kind": "equity_pass", "platform_user_id": platform_user_id, "wave": int(wave)}
+    body = {
+        "kind": "equity_pass",
+        "platform_user_id": platform_user_id,
+        "wave": int(wave),
+        "caps": _current_caps(),
+    }
     return send_bodies([body], delay_seconds=delay_seconds) == 1
 
 
 def enqueue_screen_batches(platform_user_id: str, symbols: list[str]) -> int:
+    caps = _current_caps()
     bodies = []
     for offset in range(0, len(symbols), SCREEN_BATCH):
         chunk = [symbol for symbol in symbols[offset:offset + SCREEN_BATCH] if symbol]
         if chunk:
-            bodies.append({"kind": "screen", "platform_user_id": platform_user_id, "symbols": chunk})
+            bodies.append({
+                "kind": "screen",
+                "platform_user_id": platform_user_id,
+                "symbols": chunk,
+                "caps": caps,
+            })
     if not bodies:
         return 0
     send_bodies(bodies)
@@ -59,8 +79,14 @@ def enqueue_screen_batches(platform_user_id: str, symbols: list[str]) -> int:
 
 
 def enqueue_reviews(platform_user_id: str, symbols: list[str]) -> int:
+    caps = _current_caps()
     bodies = [
-        {"kind": "review", "platform_user_id": platform_user_id, "symbol": symbol}
+        {
+            "kind": "review",
+            "platform_user_id": platform_user_id,
+            "symbol": symbol,
+            "caps": caps,
+        }
         for symbol in symbols
         if symbol
     ]

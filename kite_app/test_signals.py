@@ -304,6 +304,7 @@ def test_finished_commodity_pass_is_kept(monkeypatch):
             "universe": 2500,
             "scanned": 2500,
             "skipped": 0,
+            "caps": ["large", "mid", "small"],
         }
         scan_jobs._LISTS["short"] = dict(covered)
         scan_jobs._LISTS["long"] = dict(covered)

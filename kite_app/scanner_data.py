@@ -218,6 +218,7 @@ _CAP_LABELS = {
     "small": "small cap",
 }
 _ALL_CAPS = ("large", "mid", "small")
+_CAPS_CACHE_KEY = "final_list:caps"
 _selected_caps: frozenset[str] = frozenset(_ALL_CAPS)
 _cap_cache: Optional[tuple[float, frozenset[str], set[str]]] = None
 
@@ -239,10 +240,27 @@ def set_cap_segments(segments: Optional[list[str]] = None) -> list[str]:
     _selected_caps = frozenset(chosen)
     _cap_cache = None
     _universe_cache = None
+    try:
+        from kite_app.desk_cache import cache_set
+
+        cache_set(_CAPS_CACHE_KEY, {"caps": chosen})
+    except Exception:
+        pass
     return chosen
 
 
 def selected_cap_segments() -> list[str]:
+    global _selected_caps
+    try:
+        from kite_app.desk_cache import cache_get
+
+        payload = cache_get(_CAPS_CACHE_KEY)
+    except Exception:
+        payload = None
+    if isinstance(payload, dict) and isinstance(payload.get("caps"), list):
+        chosen = normalize_cap_segments(payload.get("caps"))
+        _selected_caps = frozenset(chosen)
+        return chosen
     return [key for key in _ALL_CAPS if key in _selected_caps]
 
 

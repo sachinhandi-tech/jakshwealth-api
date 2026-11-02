@@ -38,6 +38,16 @@ def cache_set(key: str, value: dict, ttl: int = LIST_TTL_SECONDS) -> None:
         return
 
 
+def cache_delete(*keys: str) -> None:
+    client = _client()
+    if client is None or not keys:
+        return
+    try:
+        client.delete(*keys)
+    except Exception:
+        return
+
+
 def _client():
     """Return a Redis client when REDIS_URL is set. A missing cache is not an error."""
     global _CLIENT, _CLIENT_URL

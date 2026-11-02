@@ -38,6 +38,7 @@ _PUBLIC_FIELDS = (
     "scan_all_nse",
     "book",
     "empty_book",
+    "caps",
 )
 
 
@@ -94,6 +95,8 @@ def ensure_listed_equity_scan(record: Optional[dict]) -> str:
 
 
 def _book_params(book: str, scan_mode: str, long_window: int, trend_window: int, lookback_days: int, max_stocks: int) -> dict:
+    from kite_app.scanner_data import selected_cap_segments
+
     return {
         "scan_mode": scan_mode,
         "book": book,
@@ -106,6 +109,7 @@ def _book_params(book: str, scan_mode: str, long_window: int, trend_window: int,
         "lookback_days": lookback_days,
         "max_stocks": max_stocks,
         "scan_all_nse": True,
+        "caps": selected_cap_segments(),
     }
 
 
@@ -142,26 +146,35 @@ def _book_covered(book: str) -> bool:
     missing = []
     for kind in ("short", "long"):
         result = saved.get(_coverage_key(book, kind)) or {}
-        if _covers_book(result):
+        if _covers_book(result, book=book):
             continue
         missing.append(kind)
     if not missing:
         return True
     finished = _latest_done_book(book)
-    if not _covers_book(finished):
+    if not _covers_book(finished, book=book):
         return False
     for kind in missing:
         save_crossover_list(kind, {**finished, "book": book})
     return True
 
 
-def _covers_book(result: Optional[dict]) -> bool:
+def _covers_book(result: Optional[dict], book: str = "equity") -> bool:
     if not isinstance(result, dict):
         return False
     if result.get("empty_book") is True:
         return True
     if result.get("scan_all_nse") is not True:
         return False
+    if (book or "equity") == "equity":
+        raw_caps = result.get("caps")
+        if not isinstance(raw_caps, list) or not raw_caps:
+            # Older equity coverage had no cap tag. It must not satisfy a fresh large/mid/small read.
+            return False
+        from kite_app.scanner_data import normalize_cap_segments, selected_cap_segments
+
+        if set(normalize_cap_segments(raw_caps)) != set(selected_cap_segments()):
+            return False
     universe = int(result.get("universe") or 0)
     covered = int(result.get("scanned") or 0) + int(result.get("skipped") or 0)
     return universe > 0 and covered >= universe
@@ -427,7 +440,25 @@ def run_scan_job(job_id: str) -> None:
         scan_all_nse = params.get("scan_all_nse", False)
         budget = 1200 if params.get("full_pass") or scan_all_nse else 180
         
-        result = scan_nifty100_parallel_cached(kite, budget_seconds=budget, **params)
+        scan_params = {
+            key: value
+            for key, value in params.items()
+            if key in {
+                "scan_mode",
+                "ma_type",
+                "short_type",
+                "long_type",
+                "short_window",
+                "long_window",
+                "trend_window",
+                "lookback_days",
+                "max_stocks",
+                "scan_all_nse",
+                "book",
+                "full_pass",
+            }
+        }
+        result = scan_nifty100_parallel_cached(kite, budget_seconds=budget, **scan_params)
         from kite_app.desk_progress import current_generation
 
         if current_generation() != generation:
@@ -435,6 +466,8 @@ def run_scan_job(job_id: str) -> None:
             return
         result["scan_all_nse"] = bool(scan_all_nse)
         result["full_pass"] = bool(params.get("full_pass"))
+        if isinstance(params.get("caps"), list):
+            result["caps"] = [str(item) for item in params.get("caps") if str(item).strip()]
         _finish(job_id, "done", json.dumps(result), None)
         save_crossover_list(str(params.get("scan_mode") or result.get("scan_mode") or ""), result)
         if result["full_pass"]:
@@ -527,6 +560,12 @@ def forget_saved_scans() -> None:
     )
     for key in keys:
         _LISTS.pop(key, None)
+    try:
+        from kite_app.desk_cache import cache_delete
+
+        cache_delete(*(f"crossover:{key}" for key in keys))
+    except Exception:
+        logger.info("crossover cache was not cleared")
     if not _use_database():
         return
     from kite_app.models import SavedCrossoverList
