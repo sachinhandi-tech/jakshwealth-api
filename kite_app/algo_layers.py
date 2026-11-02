@@ -27,6 +27,8 @@ RSI_TRAP = 80
 BLOWOFF_ATR = 2.5
 TOP_CANDIDATES = 5
 MAX_HOLD_DAYS = 20
+# Minimum upside to the 2R target vs a conservative fill (entry or last close).
+MIN_HOLD_RETURN = 0.10
 
 
 def select_setups(stocks: list[dict], limit: int = TOP_CANDIDATES, review: bool = True) -> dict:
@@ -57,6 +59,15 @@ def select_setups(stocks: list[dict], limit: int = TOP_CANDIDATES, review: bool 
             rejected.append({
                 "symbol": decision["symbol"],
                 "reason": " ".join(decision["traps"]),
+            })
+            continue
+        if not _meets_min_hold_return(decision.get("entry"), decision.get("target"), decision.get("last_close")):
+            rejected.append({
+                "symbol": decision["symbol"],
+                "reason": (
+                    f"Target upside is under {MIN_HOLD_RETURN:.0%} within {MAX_HOLD_DAYS} sessions, "
+                    "so it is not sent to the model."
+                ),
             })
             continue
         accepted.append(decision)
@@ -419,6 +430,9 @@ def _desk(candles: list[dict], breakout: Optional[dict], entry: Optional[float],
         "risk_pct": round(risk / entry, 4) if risk and entry else None,
         "stop_in_atr": round(risk / atr, 4) if risk and atr else None,
         "room_r": round((target - close) / risk, 4) if risk and target is not None else None,
+        "expected_return": _target_return(entry, target, close),
+        "min_hold_return": MIN_HOLD_RETURN,
+        "max_hold_days": MAX_HOLD_DAYS,
         "atr_pct": round(atr / close, 4) if close else None,
         "rsi_five_sessions_ago": None if prior_rsi is None else round(prior_rsi, 2),
         "up_volume_20": round(up_volume, 2),
@@ -443,6 +457,25 @@ def _desk(candles: list[dict], breakout: Optional[dict], entry: Optional[float],
     return packet
 
 
+def _target_return(entry: Optional[float], target: Optional[float], last_close: Optional[float]) -> Optional[float]:
+    """Upside to target from a conservative fill (the higher of entry and last close)."""
+    try:
+        entry_price = float(entry)
+        target_price = float(target)
+        close_price = float(last_close)
+    except (TypeError, ValueError):
+        return None
+    if entry_price <= 0 or close_price <= 0 or target_price <= close_price or target_price <= entry_price:
+        return None
+    fill = max(entry_price, close_price)
+    return round((target_price - fill) / fill, 4)
+
+
+def _meets_min_hold_return(entry: Optional[float], target: Optional[float], last_close: Optional[float]) -> bool:
+    value = _target_return(entry, target, last_close)
+    return value is not None and value >= MIN_HOLD_RETURN
+
+
 def _book_call(packet: dict, traps: list[str], rsi: float, entry: Optional[float], stop: Optional[float], target: Optional[float], last_close: float, screens: dict, bearish: bool) -> str:
     """Arithmetic only. The model confirms or vetoes this. It cannot invent the other side."""
     broken = bool(traps) or rsi >= RSI_TRAP or (packet["last_true_range_atr"] or 0) > BLOWOFF_ATR or not packet["above_breakout_low"]
@@ -455,6 +488,7 @@ def _book_call(packet: dict, traps: list[str], rsi: float, entry: Optional[float
         and stop < entry < last_close < target
         and rsi < RSI_TRAP
         and all(screens.values())
+        and _meets_min_hold_return(entry, target, last_close)
     ):
         return "buy"
     if bearish:

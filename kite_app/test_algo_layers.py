@@ -59,6 +59,7 @@ def test_equity_retest_is_ranked_with_a_2r_target():
     risk = setup["entry"] - setup["stop"]
     assert setup["target"] == round(setup["entry"] + 2 * risk, 4)
     assert setup["stop"] < setup["entry"] < setup["last_close"] < setup["target"]
+    assert setup["desk"]["expected_return"] >= 0.10
     assert "3" in setup["reason"] or "times" in setup["reason"]
     assert "Sector momentum is not scored" in setup["reason"]
     assert setup["quantity"] == 1000
@@ -69,6 +70,58 @@ def test_equity_retest_is_ranked_with_a_2r_target():
         "price_volume": True,
         "rsi_momentum_atr": True,
     }
+
+
+def test_thin_target_under_ten_percent_is_not_sent_to_the_model():
+    from kite_app.algo_layers import _meets_min_hold_return
+
+    assert _meets_min_hold_return(100, 109, 101) is False
+    assert _meets_min_hold_return(100, 120, 101) is True
+    stock = _retest_stock("THIN")
+    decision = evaluate_stock(stock)
+    assert decision is not None
+    # Force a sub-10% target while keeping screens intact.
+    decision["entry"] = 100
+    decision["stop"] = 99
+    decision["target"] = 105
+    decision["last_close"] = 101
+    decision["desk"]["book_call"] = "buy"
+    decision["traps"] = []
+    decision["screens"] = {
+        "moving_average": True,
+        "price_volume": True,
+        "rsi_momentum_atr": True,
+    }
+    book = select_setups([stock], review=False)
+    # Rebuild path uses evaluate_stock; patch by feeding through rejected helper via monkeypatch style check:
+    assert _meets_min_hold_return(decision["entry"], decision["target"], decision["last_close"]) is False
+    from kite_app import algo_layers
+
+    original = algo_layers.evaluate_stock
+
+    def fake_evaluate(row):
+        found = original(row)
+        if found is None:
+            return None
+        found["entry"] = 100
+        found["stop"] = 99
+        found["target"] = 105
+        found["last_close"] = 101
+        found["traps"] = []
+        found["screens"] = {
+            "moving_average": True,
+            "price_volume": True,
+            "rsi_momentum_atr": True,
+        }
+        return found
+
+    algo_layers.evaluate_stock = fake_evaluate
+    try:
+        blocked = select_setups([stock], review=False)
+    finally:
+        algo_layers.evaluate_stock = original
+    assert blocked["setups"] == []
+    assert any("under 10%" in row["reason"] for row in blocked["rejected"])
 
 
 def test_moving_average_names_join_the_book_without_a_volume_breakout():
