@@ -272,16 +272,40 @@ def test_stale_queue_message_does_not_rewrite_small_only_caps(monkeypatch):
         "symbols": ["BBB"],
         "caps": ["large", "small"],
     })
-    # Same generation but a wider cap list must also be ignored.
-    final_list.handle_message({
-        "kind": "screen",
-        "symbols": ["CCC"],
-        "caps": ["large", "mid", "small"],
-        "generation": current_generation(),
-    })
 
     assert handled == []
     assert selected_cap_segments() == ["small"]
+    set_cap_segments(["large", "mid", "small"])
+
+
+def test_same_generation_message_adopts_large_only_on_stale_worker(monkeypatch):
+    from kite_app.desk_progress import bump_generation, current_generation
+    from kite_app.scanner_data import selected_cap_segments, set_cap_segments
+
+    # Worker still thinks large+mid while the desk already restarted as large-only.
+    set_cap_segments(["large", "mid"])
+    bump_generation()
+    handled = []
+    monkeypatch.setattr(final_list, "_handle_screen", lambda body: handled.append(body.get("symbols")))
+
+    final_list.handle_message({
+        "kind": "screen",
+        "symbols": ["RELIANCE"],
+        "caps": ["large"],
+        "generation": current_generation(),
+    })
+
+    assert handled == [["RELIANCE"]]
+    assert selected_cap_segments() == ["large"]
+    set_cap_segments(["large", "mid", "small"])
+
+
+def test_empty_cap_restart_keeps_current_selection():
+    from kite_app.scanner_data import selected_cap_segments, set_cap_segments
+
+    set_cap_segments(["large"])
+    assert set_cap_segments([]) == ["large"]
+    assert selected_cap_segments() == ["large"]
     set_cap_segments(["large", "mid", "small"])
 
 
@@ -368,46 +392,96 @@ def test_live_book_count_is_not_replaced_by_the_old_cache():
         clear_activity()
 
 
-def test_finished_read_keeps_screen_progress_not_price_scan(monkeypatch):
+def test_finished_read_hides_progress_meter(monkeypatch):
     from kite_app.desk_progress import clear_activity, note_scan
 
     clear_activity()
     monkeypatch.setattr(final_list, "_FINISHED", True)
     monkeypatch.setattr(final_list, "_WORKING", False)
+    monkeypatch.setattr(final_list, "_FOCUS", "The NSE large, mid, and small cap read is finished.")
     note_scan("equity:price", 5, 495, 0, True)
     note_scan("screen", 95, 100, 0, False, label="names", action="screened")
     try:
         snap = final_list.public_snapshot()
-        assert snap["progress"]["done"] == 95
-        assert snap["progress"]["total"] == 100
-        assert snap["progress"]["action"] == "screened"
+        assert snap["progress"] is None
+        assert snap["working"] is False
+        assert len(snap["activity"]) == 1
+        assert "finished" in snap["activity"][0]["text"]
+        assert all("% remaining" not in line["text"] for line in snap["activity"])
         assert all("495" not in line["text"] for line in snap["activity"])
     finally:
         clear_activity()
         monkeypatch.setattr(final_list, "_FINISHED", False)
+        monkeypatch.setattr(final_list, "_FOCUS", "")
 
 
-def test_mark_finished_snaps_incomplete_screen_meter_to_complete(monkeypatch):
-    from kite_app.desk_progress import clear_activity, note_scan
+def test_mark_finished_clears_remaining_chatter(monkeypatch):
+    from kite_app.desk_progress import clear_activity, note_activity, note_scan
 
     clear_activity()
     monkeypatch.setattr(final_list, "_FINISHED", False)
     monkeypatch.setattr(final_list, "_WORKING", True)
     monkeypatch.setattr(final_list, "_SCREENED", {f"S{i}" for i in range(217)})
-    monkeypatch.setattr(final_list, "_BOOK", {"scanned": 217, "accepted": 0, "setups": [], "sell_calls": []})
+    monkeypatch.setattr(final_list, "_SEEN", {f"S{i}" for i in range(217)})
+    monkeypatch.setattr(final_list, "_BOOK", {"scanned": 217, "accepted": 0, "setups": [], "sell_calls": [], "vetoes": []})
     note_scan("screen", 217, 247, 0, True, label="names", action="screened")
+    note_activity("217 of 247 names screened. 12% remaining.")
     try:
         final_list._mark_finished("The NSE small cap read is finished.")
         snap = final_list.public_snapshot()
         assert snap["finished"] is True
         assert snap["working"] is False
-        assert snap["progress"]["done"] == 217
-        assert snap["progress"]["total"] == 217
-        assert snap["progress"]["remaining_percent"] == 0
+        assert snap["progress"] is None
+        assert snap["activity"] == [{"text": "The NSE small cap read is finished.", "state": "done"}]
+        assert "% remaining" not in snap["universe_note"]
     finally:
         clear_activity()
         monkeypatch.setattr(final_list, "_FINISHED", False)
         monkeypatch.setattr(final_list, "_SCREENED", set())
+        monkeypatch.setattr(final_list, "_SEEN", set())
+
+
+def test_finish_waits_for_in_flight_screens(monkeypatch):
+    monkeypatch.setattr(final_list, "_FINISHED", False)
+    monkeypatch.setattr(final_list, "_WORKING", True)
+    monkeypatch.setattr(final_list, "_SEEN", {"AAA", "BBB", "CCC"})
+    monkeypatch.setattr(final_list, "_SCREENED", {"AAA"})
+    monkeypatch.setattr(final_list, "_REVIEW_QUEUED", set())
+    monkeypatch.setattr(final_list, "_next_symbols", lambda saved=None: [])
+    monkeypatch.setattr("kite_app.scan_jobs.equity_work_pending", lambda: False)
+
+    final_list._finish_if_idle()
+
+    assert final_list._FINISHED is False
+    assert final_list._screens_pending() is True
+
+
+def test_late_screen_does_not_revive_finished_read(monkeypatch):
+    from kite_app.desk_progress import clear_activity
+
+    clear_activity()
+    monkeypatch.setattr(final_list, "_FINISHED", True)
+    monkeypatch.setattr(final_list, "_WORKING", False)
+    monkeypatch.setattr(final_list, "_FOCUS", "The NSE large, mid, and small cap read is finished.")
+    monkeypatch.setattr(final_list, "_SCREENED", {"AAA"})
+    called = []
+    monkeypatch.setattr(final_list, "_load_stocks", lambda: called.append("load") or [])
+    try:
+        final_list._handle_screen({
+            "symbols": ["BBB"],
+            "platform_user_id": "user",
+            "caps": ["large"],
+        })
+        snap = final_list.public_snapshot()
+        assert called == []
+        assert snap["finished"] is True
+        assert snap["progress"] is None
+        assert snap["activity"][0]["text"].endswith("finished.")
+    finally:
+        clear_activity()
+        monkeypatch.setattr(final_list, "_FINISHED", False)
+        monkeypatch.setattr(final_list, "_SCREENED", set())
+        monkeypatch.setattr(final_list, "_FOCUS", "")
 
 
 def test_stop_holds_the_scan_until_continue(monkeypatch):

@@ -73,9 +73,14 @@ def start_from_zero(record: Optional[dict], caps: Optional[list[str]] = None) ->
     """Drop this read's progress and start again at the first NSE share."""
     global _FINISHED, _LAST_COUNT, _RUNNING, _SEEN, _SCREENED, _REVIEW_QUEUED, _REVIEWS
     from kite_app.desk_progress import bump_generation, clear_activity, resume_scan
-    from kite_app.scanner_data import set_cap_segments
+    from kite_app.scanner_data import selected_cap_segments, set_cap_segments
 
-    chosen = set_cap_segments(caps)
+    # Restart with an explicit list pins the universe. continue_scan passes None and
+    # must keep whatever large/mid/small selection is already active.
+    if caps is None:
+        chosen = selected_cap_segments()
+    else:
+        chosen = set_cap_segments(caps)
     if not record or not record.get("api_key") or not record.get("access_token"):
         _set_working(False, _login_note())
         return public_snapshot()
@@ -118,9 +123,14 @@ def _begin_again(record: dict) -> None:
 
 
 def _message_is_current(body: dict) -> bool:
-    """Drop equity-queue work from an older generation or a different cap selection."""
+    """Drop older-generation work. Same-generation messages carry the desk caps.
+
+    SQS workers may not have seen the HTTP Start-from-zero yet. When the
+    generation matches, adopt the caps stamped on the message so a large-only
+    restart cannot keep screening mid/small on a stale worker.
+    """
     from kite_app.desk_progress import current_generation
-    from kite_app.scanner_data import normalize_cap_segments, selected_cap_segments
+    from kite_app.scanner_data import normalize_cap_segments, selected_cap_segments, set_cap_segments
 
     raw = body.get("generation")
     if raw is None:
@@ -136,8 +146,11 @@ def _message_is_current(body: dict) -> bool:
         body.get("caps") if isinstance(body.get("caps"), list) else None,
         require=True,
     )
-    desk_caps = selected_cap_segments()
-    return bool(message_caps) and set(message_caps) == set(desk_caps)
+    if not message_caps:
+        return False
+    if set(message_caps) != set(selected_cap_segments()):
+        set_cap_segments(message_caps)
+    return True
 
 
 def continue_scan(record: Optional[dict]) -> dict:
@@ -155,26 +168,26 @@ def public_snapshot() -> dict:
             "setups": [dict(item) for item in _BOOK["setups"]],
             "sell_calls": [dict(item) for item in _BOOK["sell_calls"]],
             "vetoes": [dict(item) for item in _BOOK.get("vetoes") or []],
-            "working": _WORKING,
+            "working": _WORKING and not _FINISHED,
             "paused": _paused(),
             "finished": _FINISHED,
             "caps": selected_cap_segments(),
         }
         focus = _FOCUS
-    lines = _progress_lines()
     progress = _scan_progress()
+    if book["finished"]:
+        # One clear outcome line. Never mix "finished" with "% remaining" chatter.
+        note = focus or _finished_note()
+        book["activity"] = [{"text": note, "state": "done"}]
+        book["progress"] = None
+        book["universe_note"] = note
+        return book
+    lines = _progress_lines()
     if focus and focus not in lines and "% remaining." not in focus and not _scan_chatter(focus):
         lines.append(focus)
-    if progress and not book["finished"]:
+    if progress:
         kept = [line for line in lines if not _scan_chatter(line) and "% remaining." not in line]
         kept.append(_count_line())
-        lines = kept
-    elif progress and book["finished"]:
-        # Keep the finished explanation above the meter copy so the desk shows the veto reason.
-        kept = [line for line in lines if not _scan_chatter(line)]
-        count = _count_line()
-        if count not in kept:
-            kept.append(count)
         lines = kept
     if not lines:
         lines = [_read_note()]
@@ -184,11 +197,7 @@ def public_snapshot() -> dict:
         activity.append({"text": text, "state": "active" if active else "done"})
     book["activity"] = activity
     book["progress"] = progress
-    # Prefer the finished focus / veto reason over the bare count line.
-    if focus and book["finished"]:
-        book["universe_note"] = focus
-    else:
-        book["universe_note"] = activity[-1]["text"] if activity else ""
+    book["universe_note"] = activity[-1]["text"] if activity else ""
     return book
 
 
@@ -293,9 +302,12 @@ def _equity_progress_label() -> str:
 def _progress_lines() -> list[str]:
     from kite_app.desk_progress import activity_status, scan_status
 
-    lines = activity_status()
+    lines = [
+        line for line in activity_status()
+        if "read is finished" not in str(line or "").lower()
+    ]
     if _FINISHED:
-        return lines
+        return activity_status()
     books = {
         "equity": _equity_progress_label(),
         "commodity_future": "Commodity futures",
@@ -437,6 +449,8 @@ def handle_message(body: dict) -> None:
 
 
 def _handle_pass(body: dict) -> None:
+    if _FINISHED:
+        return
     user = str(body.get("platform_user_id") or "")
     wave = int(body.get("wave") or 0) + 1
     record = _session_for(user)
@@ -462,12 +476,18 @@ def _handle_pass(body: dict) -> None:
         _note_screen_progress(len(_SCREENED), _screen_total(len(saved)))
         _set_working(True, _count_line())
         return
-    if equity_work_pending():
+    if equity_work_pending() or _screens_pending():
+        # Prices still loading, or screen batches are still in flight after being queued.
         enqueue_equity_pass(user, delay_seconds=20, wave=wave)
         total = _screen_total(len(saved))
         if total:
             _note_screen_progress(len(_SCREENED), total)
-        _set_working(True, _count_line() if total else "Waiting for the selected large/mid/small cap prices.")
+        waiting = (
+            "Waiting for the selected large/mid/small cap prices."
+            if equity_work_pending() and not total
+            else _count_line()
+        )
+        _set_working(True, waiting)
         return
     if _reviews_pending():
         _set_working(True, "Reading filings, news, and lawsuits for names that passed every screen.")
@@ -476,11 +496,16 @@ def _handle_pass(body: dict) -> None:
 
 
 def _handle_screen(body: dict) -> None:
+    if _FINISHED:
+        return
     from kite_app.scanner_data import filter_symbols_to_caps
 
     raw_symbols = [str(symbol).upper() for symbol in body.get("symbols") or [] if str(symbol).strip()]
     symbols = filter_symbols_to_caps(raw_symbols)
     if not symbols:
+        # Cap filter dropped the batch; still clear the queued SEEN entries so finish can run.
+        _mark_screened(raw_symbols)
+        _finish_if_idle()
         return
     wanted = set(symbols)
     stocks = [row for row in _load_stocks() if str(row.get("symbol") or "").upper() in wanted]
@@ -508,9 +533,12 @@ def _handle_screen(body: dict) -> None:
     _set_working(True, _count_line())
     if review_symbols:
         _set_focus(f"Queued {', '.join(review_symbols[:5])} for filings, news, and lawsuits.")
+    _finish_if_idle()
 
 
 def _handle_review(body: dict) -> None:
+    if _FINISHED:
+        return
     from kite_app.scanner_data import filter_symbols_to_caps
 
     symbol = str(body.get("symbol") or "").upper()
@@ -574,6 +602,8 @@ def _mark_screened(symbols: list[str]) -> int:
 
 
 def _note_screen_progress(done: int, total: Optional[int] = None) -> None:
+    if _FINISHED:
+        return
     from kite_app.desk_progress import note_scan, scan_status
 
     if total is None:
@@ -594,6 +624,12 @@ def _note_screen_progress(done: int, total: Optional[int] = None) -> None:
 
 def _mark_seen(symbols: list[str]) -> None:
     _SEEN.update(str(symbol).upper() for symbol in symbols if symbol)
+
+
+def _screens_pending() -> bool:
+    """True while queued screen batches have not all reported back."""
+    with _LOCK:
+        return bool(_SEEN - _SCREENED)
 
 
 def _remember_setups(rows: list[dict]) -> None:
@@ -642,7 +678,13 @@ def _read_is_complete() -> bool:
         pending = equity_work_pending()
     except Exception:
         pending = True
-    return (not pending) and (not _next_symbols()) and (not _reviews_pending()) and (not _WORKING)
+    return (
+        (not pending)
+        and (not _next_symbols())
+        and (not _screens_pending())
+        and (not _reviews_pending())
+        and (not _WORKING)
+    )
 
 
 def _finished_note() -> str:
@@ -679,11 +721,15 @@ def _finished_note() -> str:
 
 def _mark_finished(focus: str) -> None:
     global _FINISHED
-    from kite_app.desk_progress import note_scan, scan_status
+    from kite_app.desk_progress import clear_activity, note_scan, scan_status
 
     with _LOCK:
+        if _FINISHED:
+            return
         _FINISHED = True
         screened = len(_SCREENED)
+    # Drop leftover "% remaining" lines so the desk only shows the outcome.
+    clear_activity()
     # Snap the screen meter to 100% so a finished read never sits at "12% remaining".
     if screened > 0:
         note_scan("screen", screened, screened, 0, False, label="names", action="screened")
@@ -704,13 +750,15 @@ def _mark_finished(focus: str) -> None:
 
 
 def _finish_if_idle() -> None:
+    if _FINISHED:
+        return
     try:
         from kite_app.scan_jobs import equity_work_pending
 
         pending = equity_work_pending()
     except Exception:
         pending = True
-    if pending or _next_symbols() or _reviews_pending():
+    if pending or _next_symbols() or _screens_pending() or _reviews_pending():
         return
     _mark_finished(_finished_note())
 
@@ -801,12 +849,13 @@ def _loop() -> None:
             except Exception:
                 logger.info("final list screen paused")
                 _set_focus("The screen paused. It will try again.")
-            if not pending:
+            if not pending and not _next_symbols() and not _screens_pending():
                 if _reviews_pending():
                     _set_working(True, "Reading filings, news, and lawsuits for names that passed every screen.")
                 else:
-                    _mark_finished(_finished_note())
-                    return
+                    _finish_if_idle()
+                    if _FINISHED:
+                        return
             time.sleep(5)
         _set_working(False, "The equity read is still going. Open Final list again to continue.")
     finally:
@@ -828,7 +877,10 @@ def _paused() -> bool:
 def _set_working(working: bool, focus: str) -> None:
     global _WORKING, _FOCUS
     with _LOCK:
-        _WORKING = working
+        if _FINISHED and working:
+            # A finished read must not flip back to "still working" from a late batch.
+            return
+        _WORKING = working and not _FINISHED
         _FOCUS = focus
     _note_activity_line(focus)
 
@@ -837,6 +889,8 @@ def _set_focus(focus: str) -> None:
     global _FOCUS
     with _LOCK:
         _FOCUS = focus
+    if _FINISHED and "% remaining." in focus:
+        return
     _note_activity_line(focus)
 
 

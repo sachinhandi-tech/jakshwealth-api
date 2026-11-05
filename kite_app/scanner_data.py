@@ -244,9 +244,19 @@ def normalize_cap_segments(segments: Optional[list[str]] = None, *, require: boo
 
 
 def set_cap_segments(segments: Optional[list[str]] = None) -> list[str]:
-    """Restrict the live equity universe to the chosen cap lists."""
+    """Restrict the live equity universe to the chosen cap lists.
+
+    None resets to all three. An explicit empty list keeps the current selection
+    instead of silently expanding to large+mid+small (that bug made a large-only
+    Start from zero look like large+mid after a bad/empty body).
+    """
     global _selected_caps, _cap_cache, _universe_cache
-    chosen = normalize_cap_segments(segments)
+    if segments is None:
+        chosen = list(_ALL_CAPS)
+    else:
+        chosen = normalize_cap_segments(segments, require=True)
+        if not chosen:
+            chosen = [key for key in _ALL_CAPS if key in _selected_caps] or list(_ALL_CAPS)
     _selected_caps = frozenset(chosen)
     _cap_cache = None
     _universe_cache = None

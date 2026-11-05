@@ -8,7 +8,7 @@ import uuid
 from contextlib import asynccontextmanager
 from typing import Literal, Optional, Union
 
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import Body, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.middleware.cors import CORSMiddleware
@@ -477,16 +477,19 @@ def algo_scan_continue() -> dict:
 
 
 @app.post("/api/kite/algo/scan/restart")
-def algo_scan_restart(body: ScanRestartRequest = ScanRestartRequest()) -> dict:
+def algo_scan_restart(body: ScanRestartRequest = Body(default_factory=ScanRestartRequest)) -> dict:
     """Clear this read and start again at the first NSE share."""
     from kite_app.final_list import start_from_zero
+    from kite_app.scanner_data import normalize_cap_segments
 
     try:
         record = service.saved_session()
     except Exception:
         record = None
+    # require=True so an empty/missing body cannot expand to large+mid+small.
+    chosen = normalize_cap_segments(body.caps, require=True)
     try:
-        return start_from_zero(record, caps=body.caps)
+        return start_from_zero(record, caps=chosen)
     except Exception:
         from kite_app.final_list import public_snapshot
 

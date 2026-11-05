@@ -51,6 +51,10 @@ def test_cap_segment_selection_limits_listed_symbols(monkeypatch):
         ["L1", "M1", "S1"],
         ["large"],
     ) == ["L1"]
+    # Empty restart body must keep large-only, not silently add mid/small.
+    assert scanner_data.set_cap_segments(["large"]) == ["large"]
+    assert scanner_data.set_cap_segments([]) == ["large"]
+    assert scanner_data.cap_segment_note() == "NSE large cap"
     scanner_data.set_cap_segments(["large", "mid", "small"])
 
 
