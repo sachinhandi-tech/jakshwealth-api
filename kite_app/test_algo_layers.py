@@ -138,12 +138,14 @@ def test_model_buy_confirms_the_book_and_a_veto_blocks_the_gtt(monkeypatch):
     assert setup["ai_checks"]["trend"] == "pass"
 
     def veto(_key, _model, _facts):
-        return "buy", "Trend is only 1 point above the 50 SMA.", _checks(trend="fail")
+        # Soft trend/participation fails no longer block; invalidation fail still does.
+        return "buy", "Price closed back under the breakout low at 98.", _checks(invalidation="fail")
 
     setup["gtt_tradable"] = True
     review_setups([setup], ask=veto)
     assert setup["gtt_tradable"] is False
     assert setup["ai_decision"] == "stand_aside"
+    assert "Invalidation failed" in setup["ai_reason"]
 
 
 def test_model_sell_is_a_call_and_not_an_order(monkeypatch):
@@ -272,7 +274,54 @@ def test_unread_filings_news_and_lawsuits_block_the_call(monkeypatch):
     review_setups([setup], ask=allow)
     assert setup["ai_decision"] == "stand_aside"
     assert setup["gtt_tradable"] is False
-    assert "not all checked" in setup["ai_reason"]
+    assert "Filings and news were not both checked" in setup["ai_reason"]
+
+
+def test_buy_survives_soft_check_fails_when_invalidation_holds(monkeypatch):
+    from kite_app.algo_review import review_setups
+
+    setup = select_setups([_retest_stock()])["setups"][0]
+    setup["gtt_tradable"] = True
+    monkeypatch.setenv("LLM_API_KEY", "test-key")
+
+    def allow(_key, _model, _facts):
+        return (
+            "buy",
+            "Entry 100 and volume above 3.",
+            {
+                "trend": "pass",
+                "participation": "fail",
+                "volatility": "fail",
+                "asymmetry": "pass",
+                "invalidation": "pass",
+            },
+            [
+                {"name": "read_filings", "status": "ready"},
+                {"name": "read_news", "status": "ready"},
+                {"name": "read_lawsuits", "status": "unavailable"},
+            ],
+        )
+
+    review_setups([setup], ask=allow)
+    assert setup["ai_decision"] == "buy"
+    assert setup["gtt_tradable"] is True
+
+
+def test_capacity_error_is_marked_as_retry_not_a_stock_veto(monkeypatch):
+    from kite_app.algo_review import ModelCallError, review_setups
+
+    setup = select_setups([_retest_stock()])["setups"][0]
+    setup["gtt_tradable"] = True
+    monkeypatch.setenv("LLM_API_KEY", "test-key")
+
+    def busy(_key, _model, _facts):
+        raise ModelCallError("HTTP 429 The model is currently at capacity due to high demand.")
+
+    review_setups([setup], ask=busy)
+    assert setup["ai_decision"] == "unavailable"
+    assert setup["gtt_tradable"] is False
+    assert "not a stock veto" in setup["ai_reason"]
+    assert "429" in setup["ai_reason"]
 
 
 def test_empty_lawsuit_lookup_is_clear_and_can_confirm_buy(monkeypatch):

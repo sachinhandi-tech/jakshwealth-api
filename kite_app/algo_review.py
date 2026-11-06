@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 import urllib.error
 import urllib.request
 
@@ -39,22 +40,23 @@ _TOOLS = [
 ]
 
 _INSTRUCTION = (
-    "You are the portfolio manager making the final buy, sell, or stand-aside call. "
+    "You are the portfolio manager making the final buy, sell, or stand-aside call on a name "
+    "that already cleared the desk screens (moving-average crossover, price/volume expansion, "
+    "and RSI/ATR momentum). Treat that as a normal market setup, not a perfect A+ stock. "
     "Before the call, use read_filings, read_news, and read_lawsuits for this symbol. "
     "Use only the tool text for filings, news, and lawsuits. Do not invent filings, news, or lawsuits. "
     "If a tool says the source is not connected or did not answer, that source failed. "
     "If a tool says no items were found, that source was checked and is clear — treat it as read. "
-    "Then work the book in this order: trend, participation, volatility, asymmetry, invalidation. "
+    "Then score the book: trend, participation, volatility, asymmetry, invalidation. "
     "Use the numbers in the payload, including the tape, and the tool text. "
     "room_r is how many reward units (R) remain from the last close up to the target; "
     "risk is entry minus stop, so room_r = (target - close) / (entry - stop). "
     "expected_return is the upside to target from a conservative fill. "
-    "This name already passed the moving-average crossover, the price and volume expansion, and the RSI momentum and ATR screen. "
-    "A false screen was not seen. "
-    "book_call is the arithmetic. Confirm it or veto it. "
-    "Do not call buy unless book_call is buy, every check passes, and all three sources were checked "
-    "(ready text or an explicit clear/empty result). "
-    "Do not call sell unless book_call is sell, invalidation fails, and all three sources were checked. "
+    "book_call is the arithmetic. Default to confirming it when research has no material red flag "
+    "(fraud, SEBI action, imminent dilution, insolvency, or a clear invalidation break). "
+    "Do not demand every check to be perfect, huge room_r, or exceptional news coverage. "
+    "Call buy when book_call is buy, invalidation still holds, and research is not a material veto. "
+    "Call sell when book_call is sell and invalidation has failed. "
     "A missing 200-session average is not a pass. Do not invent it. "
     "A sell is a call only. It is not an order. "
     "After the tools, reply with JSON only: "
@@ -82,7 +84,14 @@ def review_setups(setups: list[dict], ask=None) -> list[dict]:
             parsed, sources = _split(caller(key, model, _facts(item)))
         except Exception as exc:
             detail = str(exc).strip() if isinstance(exc, ModelCallError) else type(exc).__name__
-            _stamp(item, "unavailable", f"The model did not answer ({detail}), so this name is not approved.")
+            if _capacity_fault(detail):
+                _stamp(
+                    item,
+                    "unavailable",
+                    f"The model was at capacity ({detail}). This is not a stock veto — run the review again in a few minutes.",
+                )
+            else:
+                _stamp(item, "unavailable", f"The model did not answer ({detail}), so this name is not approved.")
             continue
         if parsed is None:
             _stamp(item, "unavailable", "The model answer could not be read, so this name is not approved.")
@@ -95,7 +104,7 @@ def review_setups(setups: list[dict], ask=None) -> list[dict]:
                 reason,
                 checks,
                 False,
-                "Filings, news, and lawsuits were not all checked (a source failed), so there is no order.",
+                "Filings and news were not both checked (a source failed), so there is no order.",
             )
             continue
         final, tradable, note = _resolve(item, decision, checks)
@@ -261,24 +270,37 @@ def _post_messages(key: str, model: str, messages: list) -> dict:
 
 
 def _post_json(url: str, headers: dict, payload: dict) -> dict:
-    request = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"content-type": "application/json", **headers},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=45) as response:
-            return json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        raise ModelCallError(_http_fault(exc)) from None
-    except urllib.error.URLError as exc:
-        reason = str(getattr(exc, "reason", "") or "")
-        if "timed out" in reason.lower():
+    """POST JSON. Retry a few times on capacity/rate-limit answers before failing the name."""
+    last_fault = "HTTP error"
+    for attempt in range(4):
+        request = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"content-type": "application/json", **headers},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=45) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            last_fault = _http_fault(exc)
+            if exc.code in {429, 503} and attempt < 3:
+                time.sleep(2 ** attempt)
+                continue
+            raise ModelCallError(last_fault) from None
+        except urllib.error.URLError as exc:
+            reason = str(getattr(exc, "reason", "") or "")
+            if "timed out" in reason.lower():
+                raise ModelCallError("timed out") from None
+            raise ModelCallError(type(exc.reason).__name__ if exc.reason is not None else "URLError") from None
+        except TimeoutError:
             raise ModelCallError("timed out") from None
-        raise ModelCallError(type(exc.reason).__name__ if exc.reason is not None else "URLError") from None
-    except TimeoutError:
-        raise ModelCallError("timed out") from None
+    raise ModelCallError(last_fault)
+
+
+def _capacity_fault(detail: str) -> bool:
+    text = str(detail or "").lower()
+    return "429" in text or "503" in text or "capacity" in text or "rate limit" in text
 
 
 def _http_fault(exc: urllib.error.HTTPError) -> str:
@@ -325,15 +347,19 @@ def _read_source(name: str, facts: dict, get=None) -> dict:
 
 
 def _research_ready(sources) -> bool:
-    """True when every research tool was checked (has content or an explicit clear)."""
+    """True when filings and news were checked. Lawsuits are best-effort.
+
+    Market-standard desk flow: do not block a screened buy only because the
+    lawsuit feed is down, as long as filings and news were read or clear.
+    """
     if not isinstance(sources, list):
         return False
-    checked = {
-        item.get("name")
+    status = {
+        item.get("name"): item.get("status")
         for item in sources
-        if isinstance(item, dict) and item.get("status") in {"ready", "clear"}
+        if isinstance(item, dict) and item.get("name")
     }
-    return set(_TOOL_NAMES) <= checked
+    return status.get("read_filings") in {"ready", "clear"} and status.get("read_news") in {"ready", "clear"}
 
 
 def _split(result) -> tuple:
@@ -415,12 +441,20 @@ def _clean_checks(raw) -> dict | None:
 
 
 def _resolve(item: dict, decision: str, checks: dict) -> tuple[str, bool, str]:
+    """Confirm the book with market-standard gates, not a perfect 5/5 scorecard.
+
+    A screened buy needs book agreement, valid geometry, no trap flags, and a
+    holding invalidation. Soft fails on participation/volatility/asymmetry alone
+    do not veto the trade.
+    """
     book = str((item.get("desk") or {}).get("book_call") or "stand_aside")
-    if decision == "buy" and book == "buy" and all(value == "pass" for value in checks.values()) and _geometry(item) and not item.get("traps"):
+    if decision == "buy" and book == "buy" and _geometry(item) and not item.get("traps"):
+        if checks.get("invalidation") != "pass":
+            return "stand_aside", False, "Invalidation failed, so there is no order."
         if item.get("gtt_tradable"):
             return "buy", True, ""
         return "buy", False, "The call is buy, and it is not sent as a delivery GTT."
-    if decision == "sell" and book == "sell" and checks["invalidation"] == "fail":
+    if decision == "sell" and book == "sell" and checks.get("invalidation") == "fail":
         return "sell", False, "This sell is a call only. No short GTT is sent."
     if decision == "stand_aside" and book == "stand_aside":
         return "stand_aside", False, ""
