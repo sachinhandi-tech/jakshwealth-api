@@ -48,11 +48,11 @@ _INSTRUCTION = (
     "Use the numbers in the payload, including the tape, and the tool text. "
     "room_r is how many reward units (R) remain from the last close up to the target; "
     "risk is entry minus stop, so room_r = (target - close) / (entry - stop). "
-    "expected_return is the upside to target from a conservative fill; buys need at least 10% within about 20 sessions. "
+    "expected_return is the upside to target from a conservative fill. "
     "This name already passed the moving-average crossover, the price and volume expansion, and the RSI momentum and ATR screen. "
     "A false screen was not seen. "
     "book_call is the arithmetic. Confirm it or veto it. "
-    "Do not call buy unless book_call is buy, every check passes, expected_return is at least 10%, and all three sources were checked "
+    "Do not call buy unless book_call is buy, every check passes, and all three sources were checked "
     "(ready text or an explicit clear/empty result). "
     "Do not call sell unless book_call is sell, invalidation fails, and all three sources were checked. "
     "A missing 200-session average is not a pass. Do not invent it. "
@@ -415,16 +415,8 @@ def _clean_checks(raw) -> dict | None:
 
 
 def _resolve(item: dict, decision: str, checks: dict) -> tuple[str, bool, str]:
-    from kite_app.algo_layers import MAX_HOLD_DAYS, MIN_HOLD_RETURN, _meets_min_hold_return
-
     book = str((item.get("desk") or {}).get("book_call") or "stand_aside")
     if decision == "buy" and book == "buy" and all(value == "pass" for value in checks.values()) and _geometry(item) and not item.get("traps"):
-        if not _meets_min_hold_return(item.get("entry"), item.get("target"), item.get("last_close")):
-            return (
-                "stand_aside",
-                False,
-                f"Target upside is under {MIN_HOLD_RETURN:.0%} within {MAX_HOLD_DAYS} sessions, so there is no order.",
-            )
         if item.get("gtt_tradable"):
             return "buy", True, ""
         return "buy", False, "The call is buy, and it is not sent as a delivery GTT."
