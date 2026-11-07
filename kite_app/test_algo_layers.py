@@ -439,6 +439,7 @@ def test_grok_model_posts_to_xai_and_returns_only_the_tool_text(monkeypatch):
     assert "read_filings" not in calls[0][2]["input"][0]["content"]
     assert "anthropic.com" not in calls[0][0]
     assert calls[0][2]["store"] is True
+    assert calls[0][2]["reasoning"] == {"effort": "low"}
 
 
 def test_grok_reads_json_wrapped_in_other_text(monkeypatch):
@@ -472,6 +473,56 @@ def test_grok_reads_json_wrapped_in_other_text(monkeypatch):
     assert "101" in reason
     assert checks["points"]["1"] == "green"
     assert checks["valuation"] == "pass"
+
+
+def test_grok_reads_points_written_beside_the_decision(monkeypatch):
+    import json
+    from kite_app import algo_review
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps({
+                "output": [{
+                    "type": "message",
+                    "content": [{
+                        "type": "output_text",
+                        "text": json.dumps({
+                            "decision": "stand_aside",
+                            "valuation": "fail",
+                            "reason": "Promoter pledge is 18% and ROE is 9%.",
+                            "points": _checks(**{"8": "red"})["points"],
+                        }),
+                    }],
+                }],
+            }).encode("utf-8")
+
+    monkeypatch.setattr(algo_review.urllib.request, "urlopen", lambda *_args, **_kwargs: Response())
+    decision, reason, checks, _sources = algo_review._ask_grok("grok-test", "grok-4.7", {"symbol": "MSUMI"})
+    assert decision == "stand_aside"
+    assert "18%" in reason
+    assert checks["points"]["8"] == "red"
+    assert checks["valuation"] == "fail"
+
+
+def test_unreadable_answer_keeps_the_model_reason(monkeypatch):
+    from kite_app.algo_review import review_setups
+
+    monkeypatch.setenv("LLM_API_KEY", "test-key")
+    setup = {"symbol": "MSUMI", "reason": "Passed the screens.", "gtt_tradable": True, "desk": {}}
+
+    def partial(_key, _model, _facts):
+        return "stand_aside", "Promoter pledge is 18% of the holding.", None
+
+    review_setups([setup], ask=partial)
+    assert setup["ai_decision"] == "unavailable"
+    assert "18%" in setup["ai_reason"]
+    assert "30-point card was incomplete" in setup["ai_reason"]
 
 
 def test_model_http_failure_names_the_status_and_hides_the_key(monkeypatch):

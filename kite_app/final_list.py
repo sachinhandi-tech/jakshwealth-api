@@ -28,6 +28,8 @@ _STAMP = ("ai_decision", "ai_checks", "ai_reason", "gtt_tradable", "reason")
 _PASS_LIMIT = 80
 _SLICE = 250
 _MODEL_RETRY_LIMIT = 6
+_MODES = {"screens", "wealth30"}
+_MODE = "screens"
 
 
 _STOP_NOTE = "Scan stopped. Start from zero when you want a new read from the first name."
@@ -69,9 +71,15 @@ def stop_scan() -> dict:
     return public_snapshot()
 
 
-def start_from_zero(record: Optional[dict], caps: Optional[list[str]] = None) -> dict:
+def current_scan_mode() -> str:
+    """screens keeps the price filters. wealth30 sends every ticked cap name to the 30 points."""
+    return _MODE if _MODE in _MODES else "screens"
+
+
+def start_from_zero(record: Optional[dict], caps: Optional[list[str]] = None, mode: str = "screens") -> dict:
     """Drop this read's progress and start again at the first NSE share."""
-    global _FINISHED, _LAST_COUNT, _RUNNING, _SEEN, _SCREENED, _REVIEW_QUEUED, _REVIEWS, _PASSED
+    global _FINISHED, _LAST_COUNT, _MODE, _RUNNING, _SEEN, _SCREENED, _REVIEW_QUEUED, _REVIEWS, _PASSED
+    _MODE = mode if mode in _MODES else "screens"
     from kite_app.desk_progress import bump_generation, clear_activity, resume_scan
     from kite_app.scanner_data import selected_cap_segments, set_cap_segments
 
@@ -123,6 +131,14 @@ def _begin_again(record: dict) -> None:
         logger.info("scan was not started")
 
 
+def _adopt_mode(body: dict) -> None:
+    """A same-generation message carries the desk mode so a worker scores the 30 points only."""
+    global _MODE
+    raw = body.get("mode")
+    if raw in _MODES:
+        _MODE = raw
+
+
 def _message_is_current(body: dict) -> bool:
     """Drop older-generation work. Same-generation messages carry the desk caps.
 
@@ -151,6 +167,7 @@ def _message_is_current(body: dict) -> bool:
         return False
     if set(message_caps) != set(selected_cap_segments()):
         set_cap_segments(message_caps)
+    _adopt_mode(body)
     return True
 
 
@@ -177,6 +194,7 @@ def public_snapshot() -> dict:
             "paused": _paused(),
             "finished": _FINISHED,
             "caps": selected_cap_segments(),
+            "mode": current_scan_mode(),
         }
         focus = _FOCUS
     progress = _scan_progress()
@@ -497,9 +515,74 @@ def _handle_pass(body: dict) -> None:
         _set_working(True, waiting)
         return
     if _reviews_pending():
-        _set_working(True, "Scoring the 30-point framework for names that passed every screen.")
+        waiting = (
+            "Scoring the 30-point framework for the selected caps."
+            if current_scan_mode() == "wealth30"
+            else "Scoring the 30-point framework for names that passed every screen."
+        )
+        _set_working(True, waiting)
         return
     _mark_finished(_finished_note())
+
+
+def _scan_mode(body: dict) -> str:
+    raw = body.get("mode")
+    if raw in _MODES:
+        return raw
+    return current_scan_mode()
+
+
+def _framework_candidate(stock: dict) -> dict:
+    """One name for the 30-point read. A price-screen miss still goes to the model."""
+    from kite_app.algo_layers import evaluate_stock
+
+    decision = evaluate_stock(stock)
+    if decision:
+        decision["reason"] = "In the 30-point read."
+        return decision
+    candles = stock.get("candles") or []
+    last = float(candles[-1]["close"]) if candles else 0.0
+    symbol = str(stock.get("symbol") or "").upper()
+    return {
+        "symbol": symbol,
+        "company_name": str(stock.get("company_name") or symbol),
+        "exchange": stock.get("exchange") or "NSE",
+        "last_close": last or None,
+        "entry": last,
+        "stop": round(last * 0.95, 2) if last else 0,
+        "target": round(last * 1.1, 2) if last else 0,
+        "gtt_tradable": last > 0,
+        "reason": "In the 30-point read.",
+        "desk": {"book_call": "buy"},
+        "traps": [],
+    }
+
+
+def _queue_framework(body: dict, symbols: list[str], stocks: list[dict]) -> None:
+    """Send every name in the ticked caps to the 30-point framework."""
+    rows = [_framework_candidate(stock) for stock in stocks if stock.get("symbol")]
+    _note_passed(rows)
+    user = str(body.get("platform_user_id") or "")
+    review_symbols = []
+    for item in rows:
+        symbol = str(item.get("symbol") or "")
+        if symbol and _review_key(item) not in _REVIEWS and symbol not in _REVIEW_QUEUED:
+            review_symbols.append(symbol)
+    if review_symbols and user:
+        from kite_app.equity_queue import enqueue_reviews
+
+        if enqueue_reviews(user, review_symbols) < 1:
+            raise RuntimeError("review batches were not queued")
+        _REVIEW_QUEUED.update(review_symbols)
+    done = _mark_screened(symbols)
+    with _LOCK:
+        _BOOK["scanned"] = int(_BOOK["scanned"]) + len(symbols)
+        _BOOK["accepted"] = int(_BOOK["accepted"]) + len(rows)
+    _note_screen_progress(done, _screen_total(max(done, len(_saved_symbols()))))
+    _set_working(True, _count_line())
+    if review_symbols:
+        _set_focus(f"Queued {', '.join(review_symbols[:5])} for the 30-point framework.")
+    _finish_if_idle()
 
 
 def _handle_screen(body: dict) -> None:
@@ -516,6 +599,9 @@ def _handle_screen(body: dict) -> None:
         return
     wanted = set(symbols)
     stocks = [row for row in _load_stocks() if str(row.get("symbol") or "").upper() in wanted]
+    if _scan_mode(body) == "wealth30":
+        _queue_framework(body, symbols, stocks)
+        return
     from kite_app.algo_layers import select_setups
 
     book = select_setups(stocks, review=False)
@@ -563,10 +649,13 @@ def _handle_review(body: dict) -> None:
         _set_focus(f"{symbol} is waiting for saved prices.")
         _finish_if_idle()
         return
-    from kite_app.algo_layers import select_setups
+    if _scan_mode(body) == "wealth30":
+        rows = [_framework_candidate(stocks[0])]
+    else:
+        from kite_app.algo_layers import select_setups
 
-    book = select_setups(stocks, review=False)
-    rows = [*book["setups"], *book["sell_calls"]]
+        book = select_setups(stocks, review=False)
+        rows = [*book["setups"], *book["sell_calls"]]
     if not rows:
         _REVIEW_QUEUED.discard(symbol)
         _finish_if_idle()
@@ -585,10 +674,12 @@ def _handle_review(body: dict) -> None:
     else:
         veto = next((item for item in rows if item.get("ai_reason")), None)
         if veto:
-            _set_focus(
-                f"{veto.get('symbol')} passed every screen, but the model did not approve a buy. "
-                f"{veto.get('ai_reason')}"
+            lead = (
+                f"{veto.get('symbol')} was scored on the 30-point framework."
+                if _scan_mode(body) == "wealth30"
+                else f"{veto.get('symbol')} passed every screen, but the model did not approve a buy."
             )
+            _set_focus(f"{lead} {veto.get('ai_reason')}")
     _finish_if_idle()
 
 
@@ -665,6 +756,7 @@ def _mark_passed_status(rows: list[dict]) -> None:
             decision = str(item.get("ai_decision") or "").strip()
             if decision:
                 row["status"] = decision
+                row["reason"] = str(item.get("ai_reason") or "").strip()
 
 
 def _mark_screened(symbols: list[str]) -> int:
@@ -760,6 +852,23 @@ def _read_is_complete() -> bool:
     )
 
 
+def _passed_reasons(passed: list[dict]) -> list[str]:
+    """One line per name that was scored or left unanswered, keeping the model's own words."""
+    lines = []
+    for item in sorted(passed, key=lambda row: str(row.get("symbol") or "")):
+        symbol = str(item.get("symbol") or "")
+        status = str(item.get("status") or "")
+        if not symbol or status in {"", "waiting", "buy"}:
+            continue
+        reason = str(item.get("reason") or "").strip()
+        if not reason and status == "stand_aside":
+            reason = "The model did not approve a buy."
+        if not reason:
+            reason = "The model did not return a score."
+        lines.append(f"{symbol}: {reason}")
+    return lines
+
+
 def _finished_note() -> str:
     with _LOCK:
         screened = len(_SCREENED)
@@ -772,13 +881,9 @@ def _finished_note() -> str:
     universe = cap_segment_note()
     if buys:
         return f"The {universe} read is finished. {buys} approved buy{'s' if buys != 1 else ''} ready."
-    unanswered = [str(item.get("symbol") or "") for item in passed if item.get("status") == "unavailable" and item.get("symbol")]
-    if unanswered and accepted and len(unanswered) >= accepted:
-        names = ", ".join(unanswered)
-        return (
-            f"The {universe} read is finished. {names} passed the screens. "
-            "The model timed out before it could score them. This is not a stock rejection."
-        )
+    scored = _passed_reasons(passed)
+    if scored and accepted:
+        return f"The {universe} read is finished. " + " ".join(scored)
     if accepted:
         veto = next((item for item in vetoes if item.get("ai_reason")), None)
         if veto:

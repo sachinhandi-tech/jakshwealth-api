@@ -227,6 +227,7 @@ class SetupRequest(BaseModel):
 
 class ScanRestartRequest(BaseModel):
     caps: list[str] = Field(default_factory=list)
+    mode: str = "screens"
 
 
 def _auth_error(exc: KiteAuthError) -> HTTPException:
@@ -489,8 +490,9 @@ def algo_scan_restart(body: ScanRestartRequest = Body(default_factory=ScanRestar
         record = None
     # require=True so an empty/missing body cannot expand to large+mid+small.
     chosen = normalize_cap_segments(body.caps, require=True)
+    mode = "wealth30" if body.mode == "wealth30" else "screens"
     try:
-        return start_from_zero(record, caps=chosen)
+        return start_from_zero(record, caps=chosen, mode=mode)
     except Exception:
         from kite_app.final_list import public_snapshot
 

@@ -50,6 +50,15 @@ def _current_caps() -> list[str]:
         return []
 
 
+def _current_mode() -> str:
+    try:
+        from kite_app.final_list import current_scan_mode
+
+        return current_scan_mode()
+    except Exception:
+        return "screens"
+
+
 def _current_generation() -> int:
     try:
         from kite_app.desk_progress import current_generation
@@ -66,6 +75,7 @@ def enqueue_equity_pass(platform_user_id: str, delay_seconds: int = 0, wave: int
         "wave": int(wave),
         "caps": _current_caps(),
         "generation": _current_generation(),
+        "mode": _current_mode(),
     }
     return send_bodies([body], delay_seconds=delay_seconds) == 1
 
@@ -83,6 +93,7 @@ def enqueue_screen_batches(platform_user_id: str, symbols: list[str]) -> int:
                 "symbols": chunk,
                 "caps": caps,
                 "generation": generation,
+                "mode": _current_mode(),
             })
     if not bodies:
         return 0
@@ -101,6 +112,7 @@ def enqueue_reviews(platform_user_id: str, symbols: list[str], delay_seconds: in
             "caps": caps,
             "generation": generation,
             "attempt": int(attempt),
+            "mode": _current_mode(),
         }
         for symbol in symbols
         if symbol

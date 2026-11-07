@@ -127,7 +127,8 @@ def review_setups(setups: list[dict], ask=None) -> list[dict]:
             _stamp(item, "unavailable", "The model key is not in Secrets Manager, so this name is not approved.")
             continue
         try:
-            parsed, sources = _split(caller(key, model, _facts(item)))
+            result, sources = _call_result(caller(key, model, _facts(item)))
+            parsed = _unpack(result)
         except Exception as exc:
             detail = str(exc).strip() if isinstance(exc, ModelCallError) else type(exc).__name__
             if _capacity_fault(detail) or "timed out" in detail.lower():
@@ -140,7 +141,7 @@ def review_setups(setups: list[dict], ask=None) -> list[dict]:
                 _stamp(item, "unavailable", f"The model did not answer ({detail}), so this name is not approved.")
             continue
         if parsed is None:
-            _stamp(item, "unavailable", "The model answer could not be read, so this name is not approved.")
+            _stamp(item, "unavailable", _unread_reason(result))
             continue
         decision, reason, checks = parsed
         final, tradable, note = _resolve(item, decision, checks)
@@ -185,7 +186,8 @@ def _ask_grok(key: str, model: str, facts: dict) -> tuple:
             "model": model,
             "input": [{"role": "user", "content": _INSTRUCTION + "\n" + json.dumps(facts, sort_keys=True)}],
             "temperature": 0,
-            "max_output_tokens": 700,
+            "max_output_tokens": 1200,
+            "reasoning": {"effort": "low"},
             "store": True,
         },
     )
@@ -257,7 +259,7 @@ def _post_json(url: str, headers: dict, payload: dict) -> dict:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=90) as response:
+            with urllib.request.urlopen(request, timeout=120) as response:
                 return json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             last_fault = _http_fault(exc)
@@ -347,12 +349,17 @@ def _research_ready(sources) -> bool:
     return status.get("read_filings") in {"ready", "clear"} and status.get("read_news") in {"ready", "clear"}
 
 
-def _split(result) -> tuple:
+def _call_result(result) -> tuple:
     sources = None
     if isinstance(result, tuple) and len(result) == 4:
         sources = result[3]
         result = result[:3]
-    return _unpack(result), sources
+    return result, sources
+
+
+def _split(result) -> tuple:
+    raw, sources = _call_result(result)
+    return _unpack(raw), sources
 
 
 def _parse_decision(text: str) -> tuple:
@@ -365,7 +372,40 @@ def _parse_decision(text: str) -> tuple:
         parsed = _json_object(cleaned)
     if not isinstance(parsed, dict):
         raise json.JSONDecodeError("no object", cleaned, 0)
-    return parsed.get("decision"), parsed.get("reason"), parsed.get("checks")
+    return parsed.get("decision"), parsed.get("reason"), _scorecard(parsed)
+
+
+def _scorecard(parsed: dict) -> dict:
+    """The prompt asks for points and valuation beside the decision. Older answers nest them under checks."""
+    checks = parsed.get("checks")
+    card = dict(checks) if isinstance(checks, dict) else {}
+    if not isinstance(card.get("points"), dict) and isinstance(parsed.get("points"), dict):
+        card["points"] = parsed["points"]
+    if not card.get("valuation") and parsed.get("valuation"):
+        card["valuation"] = parsed.get("valuation")
+    return card
+
+
+def _unread_reason(result) -> str:
+    """Say which part of the answer failed, and keep any reason the model did write."""
+    gaps = []
+    said = ""
+    if not isinstance(result, tuple) or len(result) != 3:
+        gaps.append("the answer was not a scorecard")
+    else:
+        decision = str(result[0] or "").strip().lower()
+        said = str(result[1] or "").strip()
+        if decision in {"allow", "block", "sell"}:
+            decision = "buy" if decision == "allow" else "stand_aside"
+        if decision not in {"buy", "stand_aside"}:
+            gaps.append("the decision was missing")
+        if not any(character.isdigit() for character in said):
+            gaps.append("the reason cited no figure")
+        if _clean_checks(result[2]) is None:
+            gaps.append("the 30-point card was incomplete")
+    detail = ", ".join(gaps) if gaps else "the answer did not match the scorecard"
+    quoted = f" Model said: {said}" if said else ""
+    return f"The model answer could not be read ({detail}).{quoted} This name is not approved."
 
 
 def _json_object(text: str) -> dict:

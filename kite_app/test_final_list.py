@@ -453,6 +453,77 @@ def test_model_timeout_keeps_the_read_open_for_every_name(monkeypatch):
         set_cap_segments(["large", "mid", "small"])
 
 
+def test_wealth30_sends_every_name_to_the_30_points(monkeypatch):
+    from kite_app.desk_progress import current_generation
+    from kite_app.scanner_data import set_cap_segments
+
+    set_cap_segments(["mid"])
+    final_list._MODE = "wealth30"
+    final_list._FINISHED = False
+    final_list._SEEN = set()
+    final_list._SCREENED = set()
+    final_list._REVIEW_QUEUED = set()
+    final_list._REVIEWS = {}
+    final_list._PASSED = {}
+    final_list._BOOK = {"scanned": 0, "accepted": 0, "setups": [], "sell_calls": [], "vetoes": []}
+    monkeypatch.setattr("kite_app.scanner_data.filter_symbols_to_caps", lambda symbols, segments=None: list(symbols))
+    monkeypatch.setattr(final_list, "_load_stocks", lambda: [{"symbol": "MSUMI", "company_name": "Motherson", "candles": []}])
+    monkeypatch.setattr("kite_app.algo_layers.select_setups", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("price screens")))
+    queued = []
+    monkeypatch.setattr(
+        "kite_app.equity_queue.enqueue_reviews",
+        lambda user, symbols, delay_seconds=0, attempt=0: queued.append(list(symbols)) or len(symbols),
+    )
+    monkeypatch.setattr("kite_app.scan_jobs.equity_work_pending", lambda: True)
+    try:
+        final_list.handle_message({
+            "kind": "screen",
+            "platform_user_id": "user",
+            "symbols": ["MSUMI"],
+            "caps": ["mid"],
+            "generation": current_generation(),
+            "mode": "wealth30",
+        })
+        assert queued == [["MSUMI"]]
+        assert final_list.public_snapshot()["mode"] == "wealth30"
+        assert final_list.public_snapshot()["passed"][0]["symbol"] == "MSUMI"
+        assert final_list.public_snapshot()["passed"][0]["status"] == "waiting"
+    finally:
+        final_list._MODE = "screens"
+        final_list._PASSED = {}
+        final_list._REVIEW_QUEUED = set()
+        set_cap_segments(["large", "mid", "small"])
+
+
+def test_finished_note_keeps_each_models_reason():
+    from kite_app.scanner_data import set_cap_segments
+
+    set_cap_segments(["small"])
+    final_list._BOOK = {"scanned": 2, "accepted": 2, "setups": [], "sell_calls": [], "vetoes": []}
+    final_list._SCREENED = {"MSUMI", "LALPATHLAB"}
+    final_list._PASSED = {
+        "MSUMI": {
+            "symbol": "MSUMI",
+            "status": "stand_aside",
+            "reason": "Promoter pledge is 18%. Gate 1 or Gate 2 failed (points 8 red). Dropped, not parked. No order.",
+        },
+        "LALPATHLAB": {
+            "symbol": "LALPATHLAB",
+            "status": "unavailable",
+            "reason": "The model did not finish (timed out). This is not a stock rejection. Run the review again.",
+        },
+    }
+    try:
+        note = final_list._finished_note()
+        assert "MSUMI: Promoter pledge is 18%" in note
+        assert "points 8 red" in note
+        assert "LALPATHLAB: The model did not finish (timed out)" in note
+    finally:
+        final_list._PASSED = {}
+        final_list._SCREENED = set()
+        set_cap_segments(["large", "mid", "small"])
+
+
 def test_finished_read_is_not_relaunched_on_poll(monkeypatch):
     launched = []
     monkeypatch.setattr(final_list, "_FINISHED", True)
