@@ -110,9 +110,15 @@ def test_moving_average_names_join_the_book_without_a_volume_breakout():
 
 
 def _checks(**overrides):
-    checks = {name: "pass" for name in ("trend", "participation", "volatility", "asymmetry", "invalidation")}
-    checks.update(overrides)
-    return checks
+    """A complete 30-point card. Overrides are point ids ('6') or valuation='fail'."""
+    points = {str(index): "green" for index in range(1, 31)}
+    valuation = "pass"
+    for key, value in overrides.items():
+        if key == "valuation":
+            valuation = value
+        else:
+            points[str(key)] = value
+    return {"points": points, "valuation": valuation}
 
 
 def test_model_buy_confirms_the_book_and_a_veto_blocks_the_gtt(monkeypatch):
@@ -135,17 +141,16 @@ def test_model_buy_confirms_the_book_and_a_veto_blocks_the_gtt(monkeypatch):
     review_setups([setup], ask=allow)
     assert setup["gtt_tradable"] is True
     assert setup["ai_decision"] == "buy"
-    assert setup["ai_checks"]["trend"] == "pass"
+    assert setup["ai_checks"]["points"]["1"] == "green"
 
     def veto(_key, _model, _facts):
-        # Soft trend/participation fails no longer block; invalidation fail still does.
-        return "buy", "Price closed back under the breakout low at 98.", _checks(invalidation="fail")
+        return "buy", "Promoter pledge is 18% of shares.", _checks(**{"8": "red"})
 
     setup["gtt_tradable"] = True
     review_setups([setup], ask=veto)
     assert setup["gtt_tradable"] is False
     assert setup["ai_decision"] == "stand_aside"
-    assert "Invalidation failed" in setup["ai_reason"]
+    assert "Dropped, not parked" in setup["ai_reason"]
 
 
 def test_model_sell_is_a_call_and_not_an_order(monkeypatch):
@@ -160,26 +165,29 @@ def test_model_sell_is_a_call_and_not_an_order(monkeypatch):
     monkeypatch.setenv("LLM_API_KEY", "test-key")
 
     def agree(_key, _model, _facts):
-        return "sell", "The last bar is wider than 2.5 ATR and the close is 101.", _checks(invalidation="fail")
+        return "buy", "Support sits 28% under the close of 101.", _checks(**{"30": "red"})
 
     review_setups([decision], ask=agree)
-    assert decision["ai_decision"] == "sell"
+    assert decision["ai_decision"] == "stand_aside"
     assert decision["gtt_tradable"] is False
-    assert "No short GTT is sent." in decision["ai_reason"]
+    assert "Watchlist only" in decision["ai_reason"]
 
     def promote(_key, _model, _facts):
-        return "buy", "Close is still 101, so the long remains.", _checks()
+        return "buy", "Margin is flat at 12% and growth needs fresh debt.", _checks(**{"25": "yellow"})
 
     decision["gtt_tradable"] = True
     review_setups([decision], ask=promote)
     assert decision["ai_decision"] == "stand_aside"
     assert decision["gtt_tradable"] is False
+    assert "25, 26, and 27" in decision["ai_reason"]
 
 
 def test_model_cannot_promote_a_derivative_or_invent_filings():
     from kite_app.algo_review import _INSTRUCTION, review_setups
 
     assert "Do not invent filings, news, or lawsuits." in _INSTRUCTION
+    assert "points 1-27" in _INSTRUCTION
+    assert "30 Downside support" in _INSTRUCTION
     setup = select_setups([_retest_stock("CRUDEOIL", "MCX", "FUT")])["setups"][0]
     setup["gtt_tradable"] = False
 
@@ -277,7 +285,7 @@ def test_unread_filings_news_and_lawsuits_block_the_call(monkeypatch):
     assert "Filings and news were not both checked" in setup["ai_reason"]
 
 
-def test_buy_survives_soft_check_fails_when_invalidation_holds(monkeypatch):
+def test_one_governance_red_drops_the_name(monkeypatch):
     from kite_app.algo_review import review_setups
 
     setup = select_setups([_retest_stock()])["setups"][0]
@@ -287,24 +295,19 @@ def test_buy_survives_soft_check_fails_when_invalidation_holds(monkeypatch):
     def allow(_key, _model, _facts):
         return (
             "buy",
-            "Entry 100 and volume above 3.",
-            {
-                "trend": "pass",
-                "participation": "fail",
-                "volatility": "fail",
-                "asymmetry": "pass",
-                "invalidation": "pass",
-            },
+            "Related-party sales are 22% of revenue.",
+            _checks(**{"13": "red"}),
             [
                 {"name": "read_filings", "status": "ready"},
                 {"name": "read_news", "status": "ready"},
-                {"name": "read_lawsuits", "status": "unavailable"},
+                {"name": "read_lawsuits", "status": "clear"},
             ],
         )
 
     review_setups([setup], ask=allow)
-    assert setup["ai_decision"] == "buy"
-    assert setup["gtt_tradable"] is True
+    assert setup["ai_decision"] == "stand_aside"
+    assert setup["gtt_tradable"] is False
+    assert "Dropped, not parked" in setup["ai_reason"]
 
 
 def test_capacity_error_is_marked_as_retry_not_a_stock_veto(monkeypatch):
@@ -435,7 +438,8 @@ def test_grok_model_posts_to_xai_and_returns_only_the_tool_text(monkeypatch):
     )
     assert decision == "stand_aside"
     assert "101" in reason
-    assert checks["trend"] == "pass"
+    assert checks["points"]["1"] == "green"
+    assert checks["valuation"] == "pass"
     assert [item["name"] for item in sources] == ["read_filings", "read_news", "read_lawsuits"]
     assert calls[0][0] == "https://api.x.ai/v1/responses"
     assert calls[0][1]["Authorization"] == "Bearer grok-test"
@@ -478,7 +482,8 @@ def test_grok_reads_json_wrapped_in_other_text(monkeypatch):
     decision, reason, checks, _sources = algo_review._ask_grok("grok-test", "grok-4.7", {"symbol": "INFY"})
     assert decision == "stand_aside"
     assert "101" in reason
-    assert checks["trend"] == "pass"
+    assert checks["points"]["1"] == "green"
+    assert checks["valuation"] == "pass"
 
 
 def test_model_http_failure_names_the_status_and_hides_the_key(monkeypatch):

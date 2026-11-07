@@ -20,7 +20,46 @@ _SECRET_TEXT = re.compile(r"(xai-|sk-)[A-Za-z0-9_-]+|Bearer\s+\S+")
 
 class ModelCallError(RuntimeError):
     """A model call failed. The message is safe to show on the desk."""
-_CHECKS = ("trend", "participation", "volatility", "asymmetry", "invalidation")
+# 129 Wealth Fund 30-point framework. Pin to the deck: fundamentals first, charts last.
+_POINT_IDS = tuple(str(index) for index in range(1, 31))
+_FUNDAMENTAL_IDS = tuple(str(index) for index in range(1, 28))
+_GOVERNANCE_IDS = tuple(str(index) for index in range(11, 16))
+_HEAVY_IDS = ("25", "26", "27")
+_TECHNICAL_IDS = ("28", "29", "30")
+_COLORS = ("green", "yellow", "red")
+_POINT_TEXT = (
+    "1 Pricing Power & Moat: does the company set its own price through a durable moat "
+    "(switching cost, regulation, or customer lock-in), or is pricing decided by customers and suppliers?",
+    "2 Cyclical or Non-Cyclical: do sales and profit hold up across macro cycles, or does the cycle decide the financials? Prefer businesses that stay stable when the cycle turns.",
+    "3 Commodity or Non-Commodity: a niche, critical, differentiated product the end user cannot easily replace, or a commodity next to ten identical ones? Prefer non-commodity with visible differentiation.",
+    "4 Moat future direction: is fresh capex, product mix, and expansion widening the advantage, or is incremental revenue coming from weaker-moat, lower-quality segments?",
+    "5 Core competence: who runs daily operations, what is their track record, and can we back their capability?",
+    "6 Fraud & legal history: any fraud or legal offence involving promoters, managers, or business heads, and its status today.",
+    "7 Skin in the game: promoter stake and its historical trend. Open-market buying is the best signal; open-market selling is a red flag.",
+    "8 Promoter pledge: any pledged shares, the direction over 2-3 years, and the real reason.",
+    "9 Group structure: subsidiaries, associates, and group entities — genuine business reason, or can any of them drag the listed company down?",
+    "10 Remuneration: MD/CEO pay growth against net profit growth. A commission linked to profits is a strong positive.",
+    "11 Key employee exits: director and KMP resignations over the last 1-2 years — routine churn or an early warning?",
+    "12 Equity dilution: 5-10 year dilution history. Zero is best. Repeated dilution to fund a cash-burning business is the worst.",
+    "13 Related party transactions: scope for siphoning funds or dressing up financials through related entities.",
+    "14 Acquisition track record: how past acquisitions performed, plus intangible assets as a share of net worth.",
+    "15 Auditor quality & opinion: auditor tenure, reputation, frequency of change, and red flags in the report and notes.",
+    "16 Working capital cycle: in line with industry, or squeezing the balance sheet?",
+    "17 Inventory: are rising inventory days blocking capital?",
+    "18 Debt & interest cover: 3-year debt, D/E, and interest coverage trend.",
+    "19 Contingent liability: size versus TTM PAT and net worth, and the odds of a hit.",
+    "20 Tax rate: 3-year average against the statutory rate.",
+    "21 CFO vs PAT: is reported profit turning into real cash?",
+    "22 ROE, ROCE & multiplier: 3-5 year trend versus peers, and the leverage behind it.",
+    "23 Receivables vs sales: how much of sales stays stuck, and the trend.",
+    "24 Topline growth visibility: visible sales growth over 1-2 years.",
+    "25 Margin expansion: will incremental sales expand or dilute margin? Highest weight.",
+    "26 Growth & earnings quality: does the growth plan bloat the balance sheet? Highest weight.",
+    "27 Self-sustainable growth: can desired growth be funded from internal cash? Highest weight.",
+    "28 Price action: does the chart back an 8-12 month view? Screaming buy or screaming hold is green. A clear avoid with more downside pending is red.",
+    "29 Relative performance: is the stock outperforming the index or lagging it? Only relative return matters. Absolute return in either direction has no significance.",
+    "30 Downside support: strong support within 20% of CMP is acceptable. Support more than 20% below CMP is red.",
+)
 _TOOL_NAMES = ("read_filings", "read_news", "read_lawsuits")
 _TOOLS = [
     {
@@ -40,31 +79,35 @@ _TOOLS = [
 ]
 
 _INSTRUCTION = (
-    "You are the portfolio manager making the final buy, sell, or stand-aside call on a name "
-    "that already cleared the desk screens (moving-average crossover, price/volume expansion, "
-    "and RSI/ATR momentum). Treat that as a normal market setup, not a perfect A+ stock. "
-    "Before the call, use read_filings, read_news, and read_lawsuits for this symbol. "
-    "Use only the tool text for filings, news, and lawsuits. Do not invent filings, news, or lawsuits. "
-    "If a tool says the source is not connected or did not answer, that source failed. "
-    "If a tool says no items were found, that source was checked and is clear — treat it as read. "
-    "Then score the book: trend, participation, volatility, asymmetry, invalidation. "
-    "Use the numbers in the payload, including the tape, and the tool text. "
-    "room_r is how many reward units (R) remain from the last close up to the target; "
-    "risk is entry minus stop, so room_r = (target - close) / (entry - stop). "
-    "expected_return is the upside to target from a conservative fill. "
-    "book_call is the arithmetic. Default to confirming it when research has no material red flag "
-    "(fraud, SEBI action, imminent dilution, insolvency, or a clear invalidation break). "
-    "Do not demand every check to be perfect, huge room_r, or exceptional news coverage. "
-    "Call buy when book_call is buy, invalidation still holds, and research is not a material veto. "
-    "Call sell when book_call is sell and invalidation has failed. "
-    "A missing 200-session average is not a pass. Do not invent it. "
-    "A sell is a call only. It is not an order. "
+    "You are the investment manager applying the 129 Wealth Fund 30-point stock selection framework. "
+    "Nothing outside these 30 points and the four gates may approve a buy. "
+    "Fundamentals first. Technicals only after the business clears. "
+    "A weak business cannot be rescued by a cheap price. "
+    "Before scoring, use read_filings, read_news, and read_lawsuits for this symbol. "
+    "Use only the tool text and the payload. Do not invent filings, news, or lawsuits. Do not invent financials. "
+    "If a point cannot be verified from that text, score it red. Do not guess green. "
+    "If a tool says no items were found, that source was checked and is clear. "
+    "Score every point green (pass), yellow (caution), or red (danger). "
+    + " ".join(_POINT_TEXT)
+    + " Gates, in order, and strict: "
+    "Gate 1 Fundamentals, points 1-27. One red on points 1-27 ends the study. Dropped, not parked. "
+    "Governance points 11-15 are a veto: one red here drops the name. "
+    "Points 25, 26, and 27 carry the highest weight and must be green or the name is dropped even if everything else passes. "
+    "Gate 2 Valuation, judged against industry peers and market sentiment. Growth at a reasonable valuation. "
+    "A price that already discounts the next few years of growth is a fail. Fail means dropped, not parked. "
+    "Quality over hype: avoid overly popular names. "
+    "Gate 3 Technicals, points 28-30, only after Gate 1 and Gate 2 pass. "
+    "The chart validates valuation: 8-12 month price action, relative strength versus the index, and support within 20% of CMP. "
+    "A red on 28, 29, or 30 is not a buy. It is watchlist only. "
+    "Gate 4 Invest only when Gate 1 has no red, points 25-27 are green, valuation is pass, and points 28-30 have no red. "
+    "Four principles: growth at reasonable valuation; time-tested fundamentals; self-sustainable growth from internal accrual; quality over hype. "
+    "Do not use moving-average crossovers, RSI bands, room_r, or a 2R target as a reason to buy. "
     "After the tools, reply with JSON only: "
-    "{\"decision\":\"buy\" or \"sell\" or \"stand_aside\", "
-    "\"reason\":\"cite at least two figures\", "
-    "\"checks\":{\"trend\":\"pass\" or \"fail\", \"participation\":\"pass\" or \"fail\", "
-    "\"volatility\":\"pass\" or \"fail\", \"asymmetry\":\"pass\" or \"fail\", "
-    "\"invalidation\":\"pass\" or \"fail\"}}."
+    "{\"decision\":\"buy\" or \"stand_aside\", "
+    "\"valuation\":\"pass\" or \"fail\", "
+    "\"reason\":\"cite at least two verified figures\", "
+    "\"points\":{\"1\":\"green\" or \"yellow\" or \"red\", "
+    "and the same for every point from 2 through 30}}."
 )
 
 
@@ -163,7 +206,7 @@ def _ask_grok(key: str, model: str, facts: dict) -> tuple:
         "model": model,
         "input": [{"role": "user", "content": _INSTRUCTION + "\n" + json.dumps(facts, sort_keys=True)}],
         "temperature": 0,
-        "max_output_tokens": 1200,
+        "max_output_tokens": 2200,
         "store": True,
         "tools": tools,
     }
@@ -193,7 +236,7 @@ def _ask_grok(key: str, model: str, facts: dict) -> tuple:
             "previous_response_id": payload.get("id"),
             "input": results,
             "temperature": 0,
-            "max_output_tokens": 1200,
+            "max_output_tokens": 2200,
             "store": True,
             "tools": tools,
         }
@@ -261,7 +304,7 @@ def _post_messages(key: str, model: str, messages: list) -> dict:
         {"x-api-key": key, "anthropic-version": ANTHROPIC_VERSION},
         {
             "model": model,
-            "max_tokens": 1200,
+            "max_tokens": 2200,
             "temperature": 0,
             "tools": _TOOLS,
             "messages": messages,
@@ -418,9 +461,9 @@ def _unpack(result) -> tuple[str, str, dict] | None:
     reason = str(result[1] or "").strip()
     if decision == "allow":
         decision = "buy"
-    elif decision == "block":
+    elif decision in {"block", "sell"}:
         decision = "stand_aside"
-    if decision not in {"buy", "sell", "stand_aside"} or not any(character.isdigit() for character in reason):
+    if decision not in {"buy", "stand_aside"} or not any(character.isdigit() for character in reason):
         return None
     checks = _clean_checks(result[2])
     if checks is None:
@@ -429,36 +472,56 @@ def _unpack(result) -> tuple[str, str, dict] | None:
 
 
 def _clean_checks(raw) -> dict | None:
+    """Accept only a complete 30-point card plus a valuation gate. Anything else is unread."""
     if not isinstance(raw, dict):
         return None
-    checks = {}
-    for name in _CHECKS:
-        value = str(raw.get(name) or "").strip().lower()
-        if value not in {"pass", "fail"}:
+    points_raw = raw.get("points") if isinstance(raw.get("points"), dict) else raw
+    if not isinstance(points_raw, dict):
+        return None
+    points = {}
+    for name in _POINT_IDS:
+        value = str(points_raw.get(name) or points_raw.get(int(name)) or "").strip().lower()
+        if value not in _COLORS:
             return None
-        checks[name] = value
-    return checks
+        points[name] = value
+    valuation = str(raw.get("valuation") or "").strip().lower()
+    if valuation not in {"pass", "fail"}:
+        return None
+    return {"points": points, "valuation": valuation}
 
 
 def _resolve(item: dict, decision: str, checks: dict) -> tuple[str, bool, str]:
-    """Confirm the book with market-standard gates, not a perfect 5/5 scorecard.
-
-    A screened buy needs book agreement, valid geometry, no trap flags, and a
-    holding invalidation. Soft fails on participation/volatility/asymmetry alone
-    do not veto the trade.
-    """
-    book = str((item.get("desk") or {}).get("book_call") or "stand_aside")
-    if decision == "buy" and book == "buy" and _geometry(item) and not item.get("traps"):
-        if checks.get("invalidation") != "pass":
-            return "stand_aside", False, "Invalidation failed, so there is no order."
-        if item.get("gtt_tradable"):
-            return "buy", True, ""
-        return "buy", False, "The call is buy, and it is not sent as a delivery GTT."
-    if decision == "sell" and book == "sell" and checks.get("invalidation") == "fail":
-        return "sell", False, "This sell is a call only. No short GTT is sent."
-    if decision == "stand_aside" and book == "stand_aside":
-        return "stand_aside", False, ""
-    return "stand_aside", False, "The book does not support that call, so there is no order."
+    """Enforce the deck exactly. The model's buy is ignored when a gate fails."""
+    points = checks.get("points") or {}
+    valuation = checks.get("valuation")
+    fundamental_reds = [name for name in _FUNDAMENTAL_IDS if points.get(name) == "red"]
+    heavy_miss = [name for name in _HEAVY_IDS if points.get(name) != "green"]
+    technical_reds = [name for name in _TECHNICAL_IDS if points.get(name) == "red"]
+    if fundamental_reds or valuation != "pass":
+        return (
+            "stand_aside",
+            False,
+            "Gate 1 or Gate 2 failed"
+            + (f" (points {', '.join(fundamental_reds)} red)." if fundamental_reds else " (valuation fail).")
+            + " Dropped, not parked. No order.",
+        )
+    if heavy_miss:
+        return (
+            "stand_aside",
+            False,
+            "Points 25, 26, and 27 must be green (margin expansion, growth quality, self-sustainable growth). No order.",
+        )
+    if technical_reds:
+        return (
+            "stand_aside",
+            False,
+            f"Gate 3 is not a buy (points {', '.join(technical_reds)} red). Watchlist only. No order.",
+        )
+    if decision != "buy":
+        return "stand_aside", False, "The framework did not call buy, so there is no order."
+    if item.get("gtt_tradable"):
+        return "buy", True, ""
+    return "buy", False, "The call is buy, and it is not sent as a delivery GTT."
 
 
 def _geometry(item: dict) -> bool:
