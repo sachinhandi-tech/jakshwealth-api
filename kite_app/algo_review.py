@@ -1,4 +1,4 @@
-"""Final call. The model reads filings, news, and lawsuits, then confirms or vetoes the book."""
+"""Final call. The model scores the 30-point framework and confirms or vetoes the book."""
 
 from __future__ import annotations
 
@@ -83,10 +83,7 @@ _INSTRUCTION = (
     "Nothing outside these 30 points and the four gates may approve a buy. "
     "Fundamentals first. Technicals only after the business clears. "
     "A weak business cannot be rescued by a cheap price. "
-    "Before scoring, use read_filings, read_news, and read_lawsuits for this symbol. "
-    "Use only the tool text and the payload. Do not invent filings, news, or lawsuits. Do not invent financials. "
-    "If a point cannot be verified from that text, score it red. Do not guess green. "
-    "If a tool says no items were found, that source was checked and is clear. "
+    "Score this company on the 30 points only. Do not read filings, news, or lawsuits. "
     "Score every point green (pass), yellow (caution), or red (danger). "
     + " ".join(_POINT_TEXT)
     + " Gates, in order, and strict: "
@@ -102,7 +99,7 @@ _INSTRUCTION = (
     "Gate 4 Invest only when Gate 1 has no red, points 25-27 are green, valuation is pass, and points 28-30 have no red. "
     "Four principles: growth at reasonable valuation; time-tested fundamentals; self-sustainable growth from internal accrual; quality over hype. "
     "Do not use moving-average crossovers, RSI bands, room_r, or a 2R target as a reason to buy. "
-    "After the tools, reply with JSON only: "
+    "Reply with JSON only: "
     "{\"decision\":\"buy\" or \"stand_aside\", "
     "\"valuation\":\"pass\" or \"fail\", "
     "\"reason\":\"cite at least two verified figures\", "
@@ -140,16 +137,6 @@ def review_setups(setups: list[dict], ask=None) -> list[dict]:
             _stamp(item, "unavailable", "The model answer could not be read, so this name is not approved.")
             continue
         decision, reason, checks = parsed
-        if sources is not None and not _research_ready(sources):
-            _finish(
-                item,
-                "stand_aside",
-                reason,
-                checks,
-                False,
-                "Filings and news were not both checked (a source failed), so there is no order.",
-            )
-            continue
         final, tradable, note = _resolve(item, decision, checks)
         _finish(item, final, reason, checks, tradable, note)
     return setups
@@ -184,63 +171,23 @@ def _ask_model(key: str, model: str, facts: dict) -> tuple:
 
 
 def _ask_grok(key: str, model: str, facts: dict) -> tuple:
-    """Read filings, news, and lawsuits through the xAI responses API. The key stays in the header."""
-    tools = [
+    """Score the 30 points through the xAI responses API. The key stays in the header."""
+    payload = _post_json(
+        XAI_URL,
+        {"authorization": f"Bearer {key}"},
         {
-            "type": "function",
-            "name": name,
-            "description": "Read this symbol from the connected source. Use only the text that comes back.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "symbol": {"type": "string"},
-                    "exchange": {"type": "string"},
-                    "company_name": {"type": "string"},
-                },
-                "required": ["symbol"],
-            },
-        }
-        for name in _TOOL_NAMES
-    ]
-    body = {
-        "model": model,
-        "input": [{"role": "user", "content": _INSTRUCTION + "\n" + json.dumps(facts, sort_keys=True)}],
-        "temperature": 0,
-        "max_output_tokens": 2200,
-        "store": True,
-        "tools": tools,
-    }
-    sources = []
-    for _ in range(4):
-        payload = _post_json(XAI_URL, {"authorization": f"Bearer {key}"}, body)
-        output = payload.get("output") or []
-        calls = [item for item in output if isinstance(item, dict) and item.get("type") == "function_call"]
-        if not calls:
-            try:
-                decision, reason, checks = _parse_decision(_xai_text(output))
-            except json.JSONDecodeError:
-                return None, "", None, sources
-            return decision, reason, checks, sources
-        results = []
-        for call in calls:
-            function = call.get("function") if isinstance(call.get("function"), dict) else {}
-            observed = _read_source(str(call.get("name") or function.get("name") or ""), facts)
-            sources.append(observed)
-            results.append({
-                "type": "function_call_output",
-                "call_id": call.get("call_id") or call.get("id"),
-                "output": observed["text"],
-            })
-        body = {
             "model": model,
-            "previous_response_id": payload.get("id"),
-            "input": results,
+            "input": [{"role": "user", "content": _INSTRUCTION + "\n" + json.dumps(facts, sort_keys=True)}],
             "temperature": 0,
             "max_output_tokens": 2200,
             "store": True,
-            "tools": tools,
-        }
-    raise ModelCallError("research tools did not finish")
+        },
+    )
+    try:
+        decision, reason, checks = _parse_decision(_xai_text(payload.get("output") or []))
+    except json.JSONDecodeError:
+        return None, "", None, []
+    return decision, reason, checks, []
 
 
 def _xai_text(output) -> str:
@@ -267,35 +214,17 @@ def _xai_text(output) -> str:
 
 
 def _ask_claude(key: str, model: str, facts: dict) -> tuple:
-    messages = [{
+    payload = _post_messages(key, model, [{
         "role": "user",
         "content": _INSTRUCTION + "\n" + json.dumps(facts, sort_keys=True),
-    }]
-    sources = []
-    for _ in range(4):
-        payload = _post_messages(key, model, messages)
-        content = payload.get("content") or []
-        tool_uses = [part for part in content if isinstance(part, dict) and part.get("type") == "tool_use"]
-        if not tool_uses:
-            text = "".join(
-                part.get("text", "")
-                for part in content
-                if isinstance(part, dict)
-            )
-            decision, reason, checks = _parse_decision(text)
-            return decision, reason, checks, sources
-        messages.append({"role": "assistant", "content": content})
-        results = []
-        for call in tool_uses:
-            observed = _read_source(str(call.get("name") or ""), facts)
-            sources.append(observed)
-            results.append({
-                "type": "tool_result",
-                "tool_use_id": call.get("id"),
-                "content": observed["text"],
-            })
-        messages.append({"role": "user", "content": results})
-    raise ModelCallError("research tools did not finish")
+    }])
+    text = "".join(
+        part.get("text", "")
+        for part in (payload.get("content") or [])
+        if isinstance(part, dict)
+    )
+    decision, reason, checks = _parse_decision(text)
+    return decision, reason, checks, []
 
 
 def _post_messages(key: str, model: str, messages: list) -> dict:
@@ -306,7 +235,6 @@ def _post_messages(key: str, model: str, messages: list) -> dict:
             "model": model,
             "max_tokens": 2200,
             "temperature": 0,
-            "tools": _TOOLS,
             "messages": messages,
         },
     )

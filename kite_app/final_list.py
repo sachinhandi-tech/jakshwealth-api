@@ -228,7 +228,7 @@ def refresh_book() -> None:
     if approved:
         _set_focus(f"{', '.join(approved)} is approved and ready for a Zerodha buy GTT.")
     elif int(book["accepted"]):
-        _set_focus(f"{int(book['accepted'])} names passed every screen. The model is reading filings, news, and lawsuits.")
+        _set_focus(f"{int(book['accepted'])} names passed every screen. The model is scoring the 30-point framework.")
     else:
         _set_focus("No saved name has passed all three screens yet.")
     _LAST_SCREEN = time.monotonic()
@@ -497,7 +497,7 @@ def _handle_pass(body: dict) -> None:
         _set_working(True, waiting)
         return
     if _reviews_pending():
-        _set_working(True, "Reading filings, news, and lawsuits for names that passed every screen.")
+        _set_working(True, "Scoring the 30-point framework for names that passed every screen.")
         return
     _mark_finished(_finished_note())
 
@@ -543,7 +543,7 @@ def _handle_screen(body: dict) -> None:
     _note_screen_progress(done, _screen_total(max(done, len(_saved_symbols()))))
     _set_working(True, _count_line())
     if review_symbols:
-        _set_focus(f"Queued {', '.join(review_symbols[:5])} for filings, news, and lawsuits.")
+        _set_focus(f"Queued {', '.join(review_symbols[:5])} for the 30-point framework.")
     _finish_if_idle()
 
 
@@ -932,7 +932,7 @@ def _loop() -> None:
                 _set_focus("The screen paused. It will try again.")
             if not pending and not _next_symbols() and not _screens_pending():
                 if _reviews_pending():
-                    _set_working(True, "Reading filings, news, and lawsuits for names that passed every screen.")
+                    _set_working(True, "Scoring the 30-point framework for names that passed every screen.")
                 else:
                     _finish_if_idle()
                     if _FINISHED:

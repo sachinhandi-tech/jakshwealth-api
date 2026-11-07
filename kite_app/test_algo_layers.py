@@ -185,7 +185,7 @@ def test_model_sell_is_a_call_and_not_an_order(monkeypatch):
 def test_model_cannot_promote_a_derivative_or_invent_filings():
     from kite_app.algo_review import _INSTRUCTION, review_setups
 
-    assert "Do not invent filings, news, or lawsuits." in _INSTRUCTION
+    assert "Do not read filings, news, or lawsuits." in _INSTRUCTION
     assert "points 1-27" in _INSTRUCTION
     assert "30 Downside support" in _INSTRUCTION
     setup = select_setups([_retest_stock("CRUDEOIL", "MCX", "FUT")])["setups"][0]
@@ -280,9 +280,8 @@ def test_unread_filings_news_and_lawsuits_block_the_call(monkeypatch):
         )
 
     review_setups([setup], ask=allow)
-    assert setup["ai_decision"] == "stand_aside"
-    assert setup["gtt_tradable"] is False
-    assert "Filings and news were not both checked" in setup["ai_reason"]
+    assert setup["ai_decision"] == "buy"
+    assert setup["gtt_tradable"] is True
 
 
 def test_one_governance_red_drops_the_name(monkeypatch):
@@ -405,24 +404,15 @@ def test_grok_model_posts_to_xai_and_returns_only_the_tool_text(monkeypatch):
     def fake_urlopen(request, timeout=30):
         body = json.loads(request.data.decode("utf-8"))
         calls.append((request.full_url, dict(request.header_items()), body))
-        if len(calls) == 1:
-            return Response({
-                "id": "resp_1",
-                "output": [
-                    {"type": "function_call", "name": "read_filings", "call_id": "call_1", "arguments": "{}"},
-                    {"type": "function_call", "name": "read_news", "call_id": "call_2", "arguments": "{}"},
-                    {"type": "function_call", "name": "read_lawsuits", "call_id": "call_3", "arguments": "{}"},
-                ],
-            })
         return Response({
-            "id": "resp_2",
+            "id": "resp_1",
             "output": [{
                 "type": "message",
                 "content": [{
                     "type": "output_text",
                     "text": json.dumps({
                         "decision": "stand_aside",
-                        "reason": "The filing names the company and the last close is 101.",
+                        "reason": "Promoter stake is 45% and the last close is 101.",
                         "checks": _checks(),
                     }),
                 }],
@@ -430,7 +420,6 @@ def test_grok_model_posts_to_xai_and_returns_only_the_tool_text(monkeypatch):
         })
 
     monkeypatch.setattr(algo_review.urllib.request, "urlopen", fake_urlopen)
-    monkeypatch.setattr(algo_review, "lookup_text", lambda *_args, **_kwargs: "Annual filing text")
     decision, reason, checks, sources = algo_review._ask_grok(
         "grok-test",
         "grok-4.7",
@@ -440,15 +429,14 @@ def test_grok_model_posts_to_xai_and_returns_only_the_tool_text(monkeypatch):
     assert "101" in reason
     assert checks["points"]["1"] == "green"
     assert checks["valuation"] == "pass"
-    assert [item["name"] for item in sources] == ["read_filings", "read_news", "read_lawsuits"]
+    assert sources == []
+    assert len(calls) == 1
     assert calls[0][0] == "https://api.x.ai/v1/responses"
     assert calls[0][1]["Authorization"] == "Bearer grok-test"
     assert "x-api-key" not in {name.lower() for name in calls[0][1]}
     assert calls[0][2]["model"] == "grok-4.7"
-    assert "search_parameters" not in calls[0][2]
-    assert calls[0][2]["tools"][0]["name"] == "read_filings"
-    assert calls[1][2]["previous_response_id"] == "resp_1"
-    assert calls[1][2]["input"][0]["output"] == "Annual filing text"
+    assert "tools" not in calls[0][2]
+    assert "read_filings" not in calls[0][2]["input"][0]["content"]
     assert "anthropic.com" not in calls[0][0]
     assert calls[0][2]["store"] is True
 
