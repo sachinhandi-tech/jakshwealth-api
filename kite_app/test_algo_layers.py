@@ -185,7 +185,8 @@ def test_model_sell_is_a_call_and_not_an_order(monkeypatch):
 def test_model_cannot_promote_a_derivative_or_invent_filings():
     from kite_app.algo_review import _INSTRUCTION, review_setups
 
-    assert "Do not read filings, news, or lawsuits." in _INSTRUCTION
+    assert "Screener consolidated page" in _INSTRUCTION
+    assert "Do not invent a figure." in _INSTRUCTION
     assert "points 1-27" in _INSTRUCTION
     assert "30 Downside support" in _INSTRUCTION
     setup = select_setups([_retest_stock("CRUDEOIL", "MCX", "FUT")])["setups"][0]
@@ -435,11 +436,15 @@ def test_grok_model_posts_to_xai_and_returns_only_the_tool_text(monkeypatch):
     assert calls[0][1]["Authorization"] == "Bearer grok-test"
     assert "x-api-key" not in {name.lower() for name in calls[0][1]}
     assert calls[0][2]["model"] == "grok-4.7"
-    assert "tools" not in calls[0][2]
+    assert calls[0][2]["tools"] == [{
+        "type": "web_search",
+        "filters": {"allowed_domains": ["screener.in"]},
+    }]
     assert "read_filings" not in calls[0][2]["input"][0]["content"]
+    assert "Screener consolidated page" in calls[0][2]["input"][0]["content"]
     assert "anthropic.com" not in calls[0][0]
     assert calls[0][2]["store"] is True
-    assert calls[0][2]["reasoning"] == {"effort": "low"}
+    assert calls[0][2]["reasoning"] == {"effort": "medium"}
 
 
 def test_grok_reads_json_wrapped_in_other_text(monkeypatch):

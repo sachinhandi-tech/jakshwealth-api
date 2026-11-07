@@ -83,7 +83,14 @@ _INSTRUCTION = (
     "Nothing outside these 30 points and the four gates may approve a buy. "
     "Fundamentals first. Technicals only after the business clears. "
     "A weak business cannot be rescued by a cheap price. "
-    "Score this company on the 30 points only. Do not read filings, news, or lawsuits. "
+    "Before you score, search the web and open the Screener consolidated page for this exact NSE symbol "
+    "(screener.in/company/SYMBOL/consolidated/). "
+    "On that page read the ratio strip, the shareholding pattern including pledge, Profit and Loss, "
+    "Balance Sheet, Cash Flow, and the auditor note. Do not stop after the shareholding percentages. "
+    "Take promoter holding, pledge, debt, interest cover, ROE, ROCE, cash flow versus profit, "
+    "receivables, inventory, sales growth, margins, tax, and the auditor from those sections. "
+    "Score only figures you found there, plus the price tape in this request for points 28-30. "
+    "If a figure is not on the page, mark that point red and say it was not found. Do not invent a figure. "
     "Score every point green (pass), yellow (caution), or red (danger). "
     "1 pricing power. 2 cyclical or stable. 3 commodity or differentiated. 4 moat direction. "
     "5 core competence. 6 fraud and legal history. 7 promoter stake. 8 pledge. 9 group structure. 10 pay versus profit. "
@@ -187,9 +194,15 @@ def _ask_grok(key: str, model: str, facts: dict) -> tuple:
             "input": [{"role": "user", "content": _INSTRUCTION + "\n" + json.dumps(facts, sort_keys=True)}],
             "temperature": 0,
             "max_output_tokens": 1200,
-            "reasoning": {"effort": "low"},
+            "reasoning": {"effort": "medium"},
+            "tools": [{
+                "type": "web_search",
+                "filters": {"allowed_domains": ["screener.in"]},
+            }],
             "store": True,
         },
+        timeout=180,
+        timeout_retries=1,
     )
     try:
         decision, reason, checks = _parse_decision(_xai_text(payload.get("output") or []))
@@ -248,7 +261,7 @@ def _post_messages(key: str, model: str, messages: list) -> dict:
     )
 
 
-def _post_json(url: str, headers: dict, payload: dict) -> dict:
+def _post_json(url: str, headers: dict, payload: dict, timeout: int = 120, timeout_retries: int = 2) -> dict:
     """POST JSON. Retry a few times on capacity/rate-limit answers before failing the name."""
     last_fault = "HTTP error"
     for attempt in range(4):
@@ -259,7 +272,7 @@ def _post_json(url: str, headers: dict, payload: dict) -> dict:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=120) as response:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
                 return json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             last_fault = _http_fault(exc)
@@ -269,7 +282,7 @@ def _post_json(url: str, headers: dict, payload: dict) -> dict:
             raise ModelCallError(last_fault) from None
         except urllib.error.URLError as exc:
             reason = str(getattr(exc, "reason", "") or "")
-            if "timed out" in reason.lower() and attempt < 2:
+            if "timed out" in reason.lower() and attempt < timeout_retries:
                 last_fault = "timed out"
                 time.sleep(2 ** attempt)
                 continue
@@ -277,7 +290,7 @@ def _post_json(url: str, headers: dict, payload: dict) -> dict:
                 raise ModelCallError("timed out") from None
             raise ModelCallError(type(exc.reason).__name__ if exc.reason is not None else "URLError") from None
         except TimeoutError:
-            if attempt < 2:
+            if attempt < timeout_retries:
                 last_fault = "timed out"
                 time.sleep(2 ** attempt)
                 continue
