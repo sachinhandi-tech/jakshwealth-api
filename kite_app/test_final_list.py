@@ -3,16 +3,20 @@ import time
 import kite_app.final_list as final_list
 
 
-def test_final_list_returns_before_the_model_runs():
+def test_final_list_returns_before_the_model_runs(monkeypatch):
+    launched = []
+    monkeypatch.setattr(final_list, "_launch", lambda record: launched.append(True))
+    monkeypatch.setattr(final_list, "_WORKING", False)
+    monkeypatch.setattr(final_list, "_FINISHED", False)
     result = final_list.begin_final_list(
         {"api_key": "key", "access_token": "secret-token"},
         launch=False,
     )
 
-    assert result["working"] is True
+    assert launched == []
+    assert result["working"] is False
     assert result["paused"] is False
     assert "secret-token" not in str(result)
-    assert any("equities" in line["text"] for line in result["activity"])
 
 
 def test_saved_names_reach_the_model_away_from_the_request(monkeypatch):
@@ -395,6 +399,57 @@ def test_passed_names_are_listed_before_the_model_runs(monkeypatch):
         }]
     finally:
         final_list._PASSED = {}
+        set_cap_segments(["large", "mid", "small"])
+
+
+def test_model_timeout_keeps_the_read_open_for_every_name(monkeypatch):
+    from kite_app.scanner_data import set_cap_segments
+
+    set_cap_segments(["large"])
+    queued = []
+    monkeypatch.setattr(final_list, "_FINISHED", False)
+    monkeypatch.setattr(final_list, "_WORKING", True)
+    monkeypatch.setattr(final_list, "_REVIEW_QUEUED", {"JKCEMENT"})
+    monkeypatch.setattr(final_list, "_REVIEWS", {})
+    monkeypatch.setattr(final_list, "_PASSED", {"JKCEMENT": {"symbol": "JKCEMENT", "company_name": "", "status": "waiting"}})
+    monkeypatch.setattr(final_list, "_BOOK", {"scanned": 1, "accepted": 1, "setups": [], "sell_calls": [], "vetoes": []})
+    monkeypatch.setattr("kite_app.scanner_data.filter_symbols_to_caps", lambda symbols, segments=None: list(symbols))
+    monkeypatch.setattr(final_list, "_load_stocks", lambda: [{"symbol": "JKCEMENT"}])
+    monkeypatch.setattr(
+        "kite_app.algo_layers.select_setups",
+        lambda stocks, review=False: {
+            "setups": [{"symbol": "JKCEMENT", "reason": "Passed the screens.", "gtt_tradable": True, "desk": {"book_call": "buy"}}],
+            "sell_calls": [],
+        },
+    )
+
+    def timeout(rows, ask=None):
+        rows[0]["ai_decision"] = "unavailable"
+        rows[0]["ai_reason"] = "The model did not finish (timed out). This is not a stock rejection. Run the review again."
+        rows[0]["gtt_tradable"] = False
+
+    monkeypatch.setattr("kite_app.algo_review.review_setups", timeout)
+    monkeypatch.setattr(
+        "kite_app.equity_queue.enqueue_reviews",
+        lambda user, symbols, delay_seconds=0, attempt=0: queued.append((list(symbols), delay_seconds, attempt)) or 1,
+    )
+    monkeypatch.setattr("kite_app.scan_jobs.equity_work_pending", lambda: False)
+    try:
+        final_list._handle_review({
+            "symbol": "JKCEMENT",
+            "platform_user_id": "user",
+            "caps": ["large"],
+            "attempt": 0,
+        })
+        assert queued == [(["JKCEMENT"], 30, 1)]
+        assert final_list._FINISHED is False
+        assert "JKCEMENT" in final_list._REVIEW_QUEUED
+        assert "JKCEMENT" not in final_list._REVIEWS
+        assert final_list._PASSED["JKCEMENT"]["status"] == "waiting"
+    finally:
+        final_list._PASSED = {}
+        final_list._REVIEW_QUEUED = set()
+        final_list._REVIEWS = {}
         set_cap_segments(["large", "mid", "small"])
 
 

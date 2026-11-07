@@ -58,6 +58,26 @@ def test_cap_segment_selection_limits_listed_symbols(monkeypatch):
     scanner_data.set_cap_segments(["large", "mid", "small"])
 
 
+def test_older_saved_caps_do_not_put_large_back(monkeypatch):
+    from kite_app import scanner_data
+
+    store = {}
+
+    def cache_set(key, value, ttl=21600):
+        store[key] = dict(value)
+
+    def cache_get(key):
+        return store.get(key)
+
+    monkeypatch.setattr("kite_app.desk_cache.cache_set", cache_set)
+    monkeypatch.setattr("kite_app.desk_cache.cache_get", cache_get)
+    assert scanner_data.set_cap_segments(["mid", "small"]) == ["mid", "small"]
+    store[scanner_data._CAPS_CACHE_KEY] = {"caps": ["large", "mid", "small"], "set_at": 1}
+    assert scanner_data.selected_cap_segments() == ["mid", "small"]
+    assert scanner_data.cap_segment_note() == "NSE mid cap and small cap"
+    scanner_data.set_cap_segments(["large", "mid", "small"])
+
+
 def test_latest_signals_ignore_other_cap_coverage(monkeypatch):
     from kite_app import scan_jobs
     from kite_app.scanner_data import set_cap_segments

@@ -27,6 +27,7 @@ _PASSED: dict[str, dict] = {}
 _STAMP = ("ai_decision", "ai_checks", "ai_reason", "gtt_tradable", "reason")
 _PASS_LIMIT = 80
 _SLICE = 250
+_MODEL_RETRY_LIMIT = 6
 
 
 _STOP_NOTE = "Scan stopped. Start from zero when you want a new read from the first name."
@@ -56,8 +57,6 @@ def begin_final_list(record: Optional[dict], launch: bool = True) -> dict:
         return public_snapshot()
     if launch:
         _launch(record)
-    else:
-        _set_working(True, _FOCUS or _read_note())
     return public_snapshot()
 
 
@@ -245,8 +244,10 @@ def _review_rows(rows: list[dict]) -> None:
             item.update(saved)
             continue
         symbol = str(item.get("symbol") or "")
-        _set_focus(f"Reading filings, news, and lawsuits for {symbol}.")
+        _set_focus(f"Grok is scoring the 30-point framework for {symbol}.")
         review_setups([item])
+        if _model_still_waiting(item):
+            continue
         _REVIEWS[_review_key(item)] = {key: item.get(key) for key in _STAMP}
         if item.get("ai_decision") == "buy":
             _set_focus(f"{symbol} is approved. It is ready for a Zerodha buy GTT.")
@@ -570,8 +571,11 @@ def _handle_review(body: dict) -> None:
         _REVIEW_QUEUED.discard(symbol)
         _finish_if_idle()
         return
-    _set_focus(f"Reading filings, news, and lawsuits for {symbol}.")
+    _set_focus(f"Grok is scoring the 30-point framework for {symbol}.")
     _review_rows(rows)
+    if any(_model_still_waiting(item) for item in rows):
+        if _requeue_model(body, symbol):
+            return
     _remember_setups(rows)
     _mark_passed_status(rows)
     _REVIEW_QUEUED.discard(symbol)
@@ -603,6 +607,36 @@ def _saved_symbols() -> list[str]:
 def _next_symbols(saved: Optional[list[str]] = None) -> list[str]:
     rows = _saved_symbols() if saved is None else saved
     return [symbol for symbol in rows if symbol not in _SEEN][:_SLICE]
+
+
+def _model_still_waiting(item: dict) -> bool:
+    """A timeout or a full Grok queue is not a 30-point score."""
+    if str(item.get("ai_decision") or "") != "unavailable":
+        return False
+    reason = str(item.get("ai_reason") or "").lower()
+    return any(phrase in reason for phrase in ("timed out", "timeout", "capacity", "not a stock rejection"))
+
+
+def _requeue_model(body: dict, symbol: str) -> bool:
+    """Put the name back on the queue and keep the read open until Grok scores it."""
+    attempt = int(body.get("attempt") or 0) + 1
+    user = str(body.get("platform_user_id") or "")
+    if attempt > _MODEL_RETRY_LIMIT or not user:
+        return False
+    from kite_app.equity_queue import enqueue_reviews
+
+    if enqueue_reviews(user, [symbol], delay_seconds=min(30 * attempt, 120), attempt=attempt) < 1:
+        raise RuntimeError("model review was not requeued")
+    with _LOCK:
+        row = _PASSED.get(symbol)
+        if row:
+            row["status"] = "waiting"
+    _set_working(
+        True,
+        f"Grok is still scoring the 30-point framework for {symbol}. "
+        f"The read stays open until every passed name is scored ({attempt} of {_MODEL_RETRY_LIMIT}).",
+    )
+    return True
 
 
 def _note_passed(rows: list[dict]) -> None:
@@ -732,11 +766,19 @@ def _finished_note() -> str:
         accepted = int(_BOOK["accepted"] or 0)
         buys = len(_BOOK["setups"])
         vetoes = [dict(item) for item in _BOOK.get("vetoes") or []]
+        passed = [dict(item) for item in _PASSED.values()]
     from kite_app.scanner_data import cap_segment_note
 
     universe = cap_segment_note()
     if buys:
         return f"The {universe} read is finished. {buys} approved buy{'s' if buys != 1 else ''} ready."
+    unanswered = [str(item.get("symbol") or "") for item in passed if item.get("status") == "unavailable" and item.get("symbol")]
+    if unanswered and accepted and len(unanswered) >= accepted:
+        names = ", ".join(unanswered)
+        return (
+            f"The {universe} read is finished. {names} passed the screens. "
+            "The model timed out before it could score them. This is not a stock rejection."
+        )
     if accepted:
         veto = next((item for item in vetoes if item.get("ai_reason")), None)
         if veto:

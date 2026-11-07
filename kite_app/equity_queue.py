@@ -90,7 +90,7 @@ def enqueue_screen_batches(platform_user_id: str, symbols: list[str]) -> int:
     return sum(len(body["symbols"]) for body in bodies)
 
 
-def enqueue_reviews(platform_user_id: str, symbols: list[str]) -> int:
+def enqueue_reviews(platform_user_id: str, symbols: list[str], delay_seconds: int = 0, attempt: int = 0) -> int:
     caps = _current_caps()
     generation = _current_generation()
     bodies = [
@@ -100,13 +100,14 @@ def enqueue_reviews(platform_user_id: str, symbols: list[str]) -> int:
             "symbol": symbol,
             "caps": caps,
             "generation": generation,
+            "attempt": int(attempt),
         }
         for symbol in symbols
         if symbol
     ]
     if not bodies:
         return 0
-    send_bodies(bodies)
+    send_bodies(bodies, delay_seconds=delay_seconds)
     return len(bodies)
 
 

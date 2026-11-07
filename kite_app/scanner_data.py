@@ -223,6 +223,7 @@ _CAP_LABELS = {
 _ALL_CAPS = ("large", "mid", "small")
 _CAPS_CACHE_KEY = "final_list:caps"
 _selected_caps: frozenset[str] = frozenset(_ALL_CAPS)
+_caps_set_at = 0.0
 _cap_cache: Optional[tuple[float, frozenset[str], set[str]]] = None
 _segment_cache: dict[str, tuple[float, set[str]]] = {}
 
@@ -250,7 +251,7 @@ def set_cap_segments(segments: Optional[list[str]] = None) -> list[str]:
     instead of silently expanding to large+mid+small (that bug made a large-only
     Start from zero look like large+mid after a bad/empty body).
     """
-    global _selected_caps, _cap_cache, _universe_cache
+    global _selected_caps, _cap_cache, _universe_cache, _caps_set_at
     if segments is None:
         chosen = list(_ALL_CAPS)
     else:
@@ -258,19 +259,21 @@ def set_cap_segments(segments: Optional[list[str]] = None) -> list[str]:
         if not chosen:
             chosen = [key for key in _ALL_CAPS if key in _selected_caps] or list(_ALL_CAPS)
     _selected_caps = frozenset(chosen)
+    _caps_set_at = time.time()
     _cap_cache = None
     _universe_cache = None
     try:
         from kite_app.desk_cache import cache_set
 
-        cache_set(_CAPS_CACHE_KEY, {"caps": chosen})
+        cache_set(_CAPS_CACHE_KEY, {"caps": chosen, "set_at": _caps_set_at})
     except Exception:
         pass
-    return chosen
+    return [key for key in _ALL_CAPS if key in _selected_caps]
 
 
 def selected_cap_segments() -> list[str]:
-    global _selected_caps
+    """Return the live cap list. A newer saved choice wins. An older one does not."""
+    global _selected_caps, _caps_set_at
     try:
         from kite_app.desk_cache import cache_get
 
@@ -278,10 +281,14 @@ def selected_cap_segments() -> list[str]:
     except Exception:
         payload = None
     if isinstance(payload, dict) and isinstance(payload.get("caps"), list) and payload.get("caps"):
+        try:
+            saved_at = float(payload.get("set_at") or 0)
+        except (TypeError, ValueError):
+            saved_at = 0.0
         chosen = normalize_cap_segments(payload.get("caps"), require=True)
-        if chosen:
+        if chosen and saved_at > _caps_set_at:
             _selected_caps = frozenset(chosen)
-            return chosen
+            _caps_set_at = saved_at
     return [key for key in _ALL_CAPS if key in _selected_caps]
 
 

@@ -453,7 +453,8 @@ def algo_setups(body: SetupRequest) -> dict:
         record = service.saved_session()
     except Exception:
         record = None
-    return begin_final_list(record)
+    # A poll only reads status. It must not start a large/mid/small scan on its own.
+    return begin_final_list(record, launch=False)
 
 
 @app.post("/api/kite/algo/scan/stop")

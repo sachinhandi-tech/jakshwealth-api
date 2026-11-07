@@ -478,6 +478,7 @@ def run_scan_job(job_id: str) -> None:
             listed_cap_symbols,
             normalize_cap_segments,
             selected_cap_segments,
+            set_cap_segments,
         )
 
         generation = current_generation()
@@ -492,10 +493,13 @@ def run_scan_job(job_id: str) -> None:
                 params.get("caps") if isinstance(params.get("caps"), list) else None,
                 require=True,
             )
-            desk_caps = selected_cap_segments()
-            if not job_caps or set(job_caps) != set(desk_caps):
+            if not job_caps:
                 _finish(job_id, "done", None, None)
                 return
+            # This worker may still remember large+mid+small. The job already
+            # carries the caps from Start from zero, so run those.
+            if set(job_caps) != set(selected_cap_segments()):
+                set_cap_segments(job_caps)
         else:
             job_caps = selected_cap_segments()
             if job_generation is not None and int(job_generation) != generation:

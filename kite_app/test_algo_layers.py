@@ -323,7 +323,7 @@ def test_capacity_error_is_marked_as_retry_not_a_stock_veto(monkeypatch):
     review_setups([setup], ask=busy)
     assert setup["ai_decision"] == "unavailable"
     assert setup["gtt_tradable"] is False
-    assert "not a stock veto" in setup["ai_reason"]
+    assert "not a stock rejection" in setup["ai_reason"]
     assert "429" in setup["ai_reason"]
 
 

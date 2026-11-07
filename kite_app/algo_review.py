@@ -127,11 +127,11 @@ def review_setups(setups: list[dict], ask=None) -> list[dict]:
             parsed, sources = _split(caller(key, model, _facts(item)))
         except Exception as exc:
             detail = str(exc).strip() if isinstance(exc, ModelCallError) else type(exc).__name__
-            if _capacity_fault(detail):
+            if _capacity_fault(detail) or "timed out" in detail.lower():
                 _stamp(
                     item,
                     "unavailable",
-                    f"The model was at capacity ({detail}). This is not a stock veto — run the review again in a few minutes.",
+                    f"The model did not finish ({detail}). This is not a stock rejection. Run the review again.",
                 )
             else:
                 _stamp(item, "unavailable", f"The model did not answer ({detail}), so this name is not approved.")
@@ -323,7 +323,7 @@ def _post_json(url: str, headers: dict, payload: dict) -> dict:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=45) as response:
+            with urllib.request.urlopen(request, timeout=90) as response:
                 return json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             last_fault = _http_fault(exc)
@@ -333,10 +333,18 @@ def _post_json(url: str, headers: dict, payload: dict) -> dict:
             raise ModelCallError(last_fault) from None
         except urllib.error.URLError as exc:
             reason = str(getattr(exc, "reason", "") or "")
+            if "timed out" in reason.lower() and attempt < 2:
+                last_fault = "timed out"
+                time.sleep(2 ** attempt)
+                continue
             if "timed out" in reason.lower():
                 raise ModelCallError("timed out") from None
             raise ModelCallError(type(exc.reason).__name__ if exc.reason is not None else "URLError") from None
         except TimeoutError:
+            if attempt < 2:
+                last_fault = "timed out"
+                time.sleep(2 ** attempt)
+                continue
             raise ModelCallError("timed out") from None
     raise ModelCallError(last_fault)
 
