@@ -85,8 +85,14 @@ _INSTRUCTION = (
     "A weak business cannot be rescued by a cheap price. "
     "Score this company on the 30 points only. Do not read filings, news, or lawsuits. "
     "Score every point green (pass), yellow (caution), or red (danger). "
-    + " ".join(_POINT_TEXT)
-    + " Gates, in order, and strict: "
+    "1 pricing power. 2 cyclical or stable. 3 commodity or differentiated. 4 moat direction. "
+    "5 core competence. 6 fraud and legal history. 7 promoter stake. 8 pledge. 9 group structure. 10 pay versus profit. "
+    "11 key-employee exits. 12 equity dilution. 13 related parties. 14 acquisitions. 15 auditor. "
+    "16 working capital. 17 inventory. 18 debt and interest cover. 19 contingent liability. 20 tax rate. "
+    "21 cash flow versus profit. 22 ROE and ROCE. 23 receivables. 24 sales growth. "
+    "25 margin expansion. 26 growth quality. 27 self-sustainable growth. "
+    "28 price action over 8-12 months. 29 relative strength versus the index. 30 Downside support within 20% of price. "
+    "Gates, in order, and strict: "
     "Gate 1 Fundamentals, points 1-27. One red on points 1-27 ends the study. Dropped, not parked. "
     "Governance points 11-15 are a veto: one red here drops the name. "
     "Points 25, 26, and 27 carry the highest weight and must be green or the name is dropped even if everything else passes. "
@@ -160,7 +166,7 @@ def _facts(item: dict) -> dict:
         "score": item.get("score"),
         "traps": list(item.get("traps") or []),
         "delivery_gtt_allowed": bool(item.get("gtt_tradable")),
-        "desk": dict(item.get("desk") or {}),
+        "desk": {key: value for key, value in dict(item.get("desk") or {}).items() if key != "tape"},
     }
 
 
@@ -179,7 +185,7 @@ def _ask_grok(key: str, model: str, facts: dict) -> tuple:
             "model": model,
             "input": [{"role": "user", "content": _INSTRUCTION + "\n" + json.dumps(facts, sort_keys=True)}],
             "temperature": 0,
-            "max_output_tokens": 2200,
+            "max_output_tokens": 700,
             "store": True,
         },
     )
@@ -233,7 +239,7 @@ def _post_messages(key: str, model: str, messages: list) -> dict:
         {"x-api-key": key, "anthropic-version": ANTHROPIC_VERSION},
         {
             "model": model,
-            "max_tokens": 2200,
+            "max_tokens": 700,
             "temperature": 0,
             "messages": messages,
         },
