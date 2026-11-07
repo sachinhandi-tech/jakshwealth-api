@@ -230,6 +230,10 @@ class ScanRestartRequest(BaseModel):
     mode: str = "screens"
 
 
+class ScanStopRequest(BaseModel):
+    mode: str = "screens"
+
+
 def _auth_error(exc: KiteAuthError) -> HTTPException:
     missing = "log in" in str(exc).lower() or "no saved session" in str(exc).lower()
     return HTTPException(status_code=401 if missing else 400, detail=str(exc))
@@ -459,11 +463,12 @@ def algo_setups(body: SetupRequest) -> dict:
 
 
 @app.post("/api/kite/algo/scan/stop")
-def algo_scan_stop() -> dict:
-    """Pause the final-list read without dropping names already saved."""
+def algo_scan_stop(body: ScanStopRequest = Body(default_factory=ScanStopRequest)) -> dict:
+    """Pause one read. The other read keeps running."""
     from kite_app.final_list import stop_scan
 
-    return stop_scan()
+    mode = "wealth30" if body.mode == "wealth30" else "screens"
+    return stop_scan(mode)
 
 
 @app.post("/api/kite/algo/scan/continue")

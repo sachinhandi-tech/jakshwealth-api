@@ -43,27 +43,30 @@ def queue_url(client=None) -> str:
 
 def _current_caps() -> list[str]:
     try:
-        from kite_app.scanner_data import selected_cap_segments
+        from kite_app.final_list import enqueue_stamp
 
-        return selected_cap_segments()
+        caps, _mode, _generation = enqueue_stamp()
+        return list(caps)
     except Exception:
         return []
 
 
 def _current_mode() -> str:
     try:
-        from kite_app.final_list import current_scan_mode
+        from kite_app.final_list import enqueue_stamp
 
-        return current_scan_mode()
+        _caps, mode, _generation = enqueue_stamp()
+        return str(mode)
     except Exception:
         return "screens"
 
 
 def _current_generation() -> int:
     try:
-        from kite_app.desk_progress import current_generation
+        from kite_app.final_list import enqueue_stamp
 
-        return int(current_generation())
+        _caps, _mode, generation = enqueue_stamp()
+        return int(generation)
     except Exception:
         return 0
 

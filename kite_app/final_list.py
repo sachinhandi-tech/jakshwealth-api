@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import logging
 import threading
 import time
@@ -10,7 +11,7 @@ from typing import Optional
 
 logger = logging.getLogger("kite_app.final_list")
 
-_LOCK = threading.Lock()
+_LOCK = threading.RLock()
 _RUNNING = False
 _WORKING = False
 _FINISHED = False
@@ -30,6 +31,14 @@ _SLICE = 250
 _MODEL_RETRY_LIMIT = 6
 _MODES = {"screens", "wealth30"}
 _MODE = "screens"
+# Each read keeps its own names, caps, and generation. Switching tabs must not clear the other one.
+_SAVED: dict[str, dict] = {}
+_GEN: dict[str, Optional[int]] = {"screens": None, "wealth30": None}
+_CAPS: dict[str, list] = {"screens": [], "wealth30": []}
+_PAUSED_MODES: set[str] = set()
+_CAPS_LOCAL = threading.local()
+_LAST_SNAPSHOT: dict = {}
+_TOUCHING = False
 
 
 _STOP_NOTE = "Scan stopped. Start from zero when you want a new read from the first name."
@@ -48,13 +57,16 @@ def _read_note() -> str:
 
 
 def begin_final_list(record: Optional[dict], launch: bool = True) -> dict:
-    """Start the equity read if needed and return the lines the desk can show now."""
+    """Return both reads. A poll must not start or stop either of them."""
     from kite_app.desk_progress import scan_paused
 
     if not record or not record.get("api_key") or not record.get("access_token"):
         _set_working(False, _login_note())
         return public_snapshot()
-    if scan_paused():
+    mode = current_scan_mode()
+    if mode in _PAUSED_MODES:
+        return public_snapshot()
+    if scan_paused() and not _other_working(mode):
         _set_working(False, _FOCUS or _STOP_NOTE)
         return public_snapshot()
     if launch:
@@ -62,11 +74,17 @@ def begin_final_list(record: Optional[dict], launch: bool = True) -> dict:
     return public_snapshot()
 
 
-def stop_scan() -> dict:
-    """Stop the read. The next pass starts only when you ask to start from zero."""
-    from kite_app.desk_progress import pause_scan
+def stop_scan(mode: str = "screens") -> dict:
+    """Stop one read. The other read keeps going."""
+    mode = mode if mode in _MODES else "screens"
+    with _LOCK:
+        _switch_to_locked(mode)
+        _PAUSED_MODES.add(mode)
+        other_live = _other_working(mode)
+    if not other_live:
+        from kite_app.desk_progress import pause_scan
 
-    pause_scan()
+        pause_scan()
     _set_working(False, _STOP_NOTE)
     return public_snapshot()
 
@@ -76,59 +94,258 @@ def current_scan_mode() -> str:
     return _MODE if _MODE in _MODES else "screens"
 
 
+def _other_mode(mode: str) -> str:
+    return "wealth30" if mode == "screens" else "screens"
+
+
+def _other_working(mode: str) -> bool:
+    """True when the read that is not `mode` still has work in flight."""
+    other = _other_mode(mode)
+    if other == _MODE:
+        return bool(_WORKING) and not _FINISHED
+    snap = _SAVED.get(other)
+    if not snap:
+        return False
+    return bool(snap.get("working")) and not snap.get("finished")
+
+
+def _capture_locked() -> dict:
+    progress = None
+    try:
+        progress = _scan_progress()
+    except Exception:
+        progress = None
+    return {
+        "running": _RUNNING,
+        "working": _WORKING,
+        "finished": _FINISHED,
+        "focus": _FOCUS,
+        "book": {
+            "scanned": int(_BOOK.get("scanned") or 0),
+            "accepted": int(_BOOK.get("accepted") or 0),
+            "setups": copy.deepcopy(_BOOK.get("setups") or []),
+            "sell_calls": copy.deepcopy(_BOOK.get("sell_calls") or []),
+            "vetoes": copy.deepcopy(_BOOK.get("vetoes") or []),
+        },
+        "reviews": copy.deepcopy(_REVIEWS),
+        "last_count": _LAST_COUNT,
+        "seen": set(_SEEN),
+        "screened": set(_SCREENED),
+        "review_queued": set(_REVIEW_QUEUED),
+        "passed": copy.deepcopy(_PASSED),
+        "progress": progress,
+    }
+
+
+def _restore_locked(snap: dict) -> None:
+    global _RUNNING, _WORKING, _FINISHED, _FOCUS, _BOOK, _REVIEWS, _LAST_COUNT
+    global _SEEN, _SCREENED, _REVIEW_QUEUED, _PASSED
+    _RUNNING = bool(snap.get("running"))
+    _WORKING = bool(snap.get("working"))
+    _FINISHED = bool(snap.get("finished"))
+    _FOCUS = str(snap.get("focus") or "")
+    _BOOK = snap.get("book") or {"scanned": 0, "accepted": 0, "setups": [], "sell_calls": [], "vetoes": []}
+    _REVIEWS = snap.get("reviews") or {}
+    _LAST_COUNT = snap.get("last_count", -1)
+    _SEEN = snap.get("seen") or set()
+    _SCREENED = snap.get("screened") or set()
+    _REVIEW_QUEUED = snap.get("review_queued") or set()
+    _PASSED = snap.get("passed") or {}
+
+
+def _blank_locked() -> None:
+    global _RUNNING, _WORKING, _FINISHED, _FOCUS, _BOOK, _REVIEWS, _LAST_COUNT
+    global _SEEN, _SCREENED, _REVIEW_QUEUED, _PASSED
+    _RUNNING = False
+    _WORKING = False
+    _FINISHED = False
+    _FOCUS = ""
+    _BOOK = {"scanned": 0, "accepted": 0, "setups": [], "sell_calls": [], "vetoes": []}
+    _REVIEWS = {}
+    _LAST_COUNT = -1
+    _SEEN = set()
+    _SCREENED = set()
+    _REVIEW_QUEUED = set()
+    _PASSED = {}
+
+
+def _switch_to_locked(mode: str) -> None:
+    """Caller holds _LOCK. Park the live read and load the one this message belongs to."""
+    global _MODE
+    mode = mode if mode in _MODES else "screens"
+    if mode == _MODE:
+        return
+    _SAVED[_MODE] = _capture_locked()
+    snap = _SAVED.get(mode)
+    if snap:
+        _restore_locked(snap)
+    else:
+        _blank_locked()
+    _MODE = mode
+
+
+def _active_caps() -> list:
+    local = getattr(_CAPS_LOCAL, "caps", None)
+    if local:
+        return list(local)
+    from kite_app.scanner_data import selected_cap_segments
+
+    return selected_cap_segments()
+
+
+def enqueue_stamp() -> tuple:
+    """Caps, mode, and generation for the read this thread is queueing."""
+    from kite_app.desk_progress import current_generation
+    from kite_app.scanner_data import selected_cap_segments
+
+    local_mode = getattr(_CAPS_LOCAL, "mode", None)
+    mode = local_mode if local_mode in _MODES else current_scan_mode()
+    caps = list(getattr(_CAPS_LOCAL, "caps", None) or [])
+    if not caps:
+        caps = list(selected_cap_segments())
+    generation = getattr(_CAPS_LOCAL, "generation", None)
+    if generation is None:
+        pinned = _GEN.get(mode)
+        if local_mode in _MODES and pinned is not None:
+            generation = pinned
+        else:
+            generation = current_generation()
+    return caps, mode, int(generation)
+
+
+def _message_cap_list(body: dict) -> list:
+    from kite_app.scanner_data import normalize_cap_segments
+
+    return normalize_cap_segments(
+        body.get("caps") if isinstance(body.get("caps"), list) else None,
+        require=True,
+    )
+
+
+def _generation_matches(mode: str, raw) -> bool:
+    from kite_app.desk_progress import current_generation
+
+    live = current_generation()
+    if raw is None:
+        return live == 0
+    try:
+        got = int(raw)
+    except (TypeError, ValueError):
+        return False
+    if got == live:
+        return True
+    pinned = _GEN.get(mode)
+    return pinned is not None and got == int(pinned)
+
+
+def _bind_enqueue(mode: str, body: dict) -> None:
+    from kite_app.desk_progress import current_generation
+
+    caps = _message_cap_list(body)
+    if caps:
+        _CAPS_LOCAL.caps = list(caps)
+        _CAPS[mode] = list(caps)
+    _CAPS_LOCAL.mode = mode
+    pinned = _GEN.get(mode)
+    _CAPS_LOCAL.generation = int(pinned) if pinned is not None else int(current_generation())
+
+
+def _clear_enqueue() -> None:
+    for name in ("caps", "mode", "generation"):
+        if hasattr(_CAPS_LOCAL, name):
+            delattr(_CAPS_LOCAL, name)
+
+
+def _queue_should_wait() -> bool:
+    """Sleep the worker only when every read is paused."""
+    if not _paused():
+        return False
+    for mode in _MODES:
+        if mode in _PAUSED_MODES:
+            continue
+        if mode == _MODE and _WORKING and not _FINISHED:
+            return False
+        snap = _SAVED.get(mode)
+        if snap and snap.get("working") and not snap.get("finished"):
+            return False
+    return True
+
+
 def start_from_zero(record: Optional[dict], caps: Optional[list[str]] = None, mode: str = "screens") -> dict:
-    """Drop this read's progress and start again at the first NSE share."""
-    global _FINISHED, _LAST_COUNT, _MODE, _RUNNING, _SEEN, _SCREENED, _REVIEW_QUEUED, _REVIEWS, _PASSED
-    _MODE = mode if mode in _MODES else "screens"
+    """Drop this read's progress and start again at the first NSE share.
+
+    TechnicalScan and PaulScan each keep their own names, caps, and queue generation.
+    """
+    global _FINISHED, _LAST_COUNT, _RUNNING, _SEEN, _SCREENED, _REVIEW_QUEUED, _REVIEWS, _PASSED, _BOOK
+    mode = mode if mode in _MODES else "screens"
     from kite_app.desk_progress import bump_generation, clear_activity, resume_scan
     from kite_app.scanner_data import selected_cap_segments, set_cap_segments
 
-    # Restart with an explicit list pins the universe. continue_scan passes None and
+    # Restart with an explicit list pins this read. continue_scan passes None and
     # must keep whatever large/mid/small selection is already active.
-    if caps is None:
-        chosen = selected_cap_segments()
-    else:
-        chosen = set_cap_segments(caps)
-    if not record or not record.get("api_key") or not record.get("access_token"):
-        _set_working(False, _login_note())
-        return public_snapshot()
-    bump_generation()
-    clear_activity()
     with _LOCK:
-        _SEEN = set()
-        _SCREENED = set()
-        _REVIEW_QUEUED = set()
-        _REVIEWS = {}
-        _PASSED = {}
-        _LAST_COUNT = -1
-        _FINISHED = False
-        _BOOK["scanned"] = 0
-        _BOOK["accepted"] = 0
-        _BOOK["setups"] = []
-        _BOOK["sell_calls"] = []
-        _BOOK["vetoes"] = []
-        _RUNNING = False
-    # Clear coverage before any poll can relaunch against the previous mid/small list.
-    try:
-        from kite_app.scan_jobs import forget_saved_scans
+        _switch_to_locked(mode)
+        _PAUSED_MODES.discard(mode)
+        if caps is None:
+            chosen = list(selected_cap_segments())
+        else:
+            chosen = list(set_cap_segments(caps))
+        _CAPS[mode] = list(chosen)
+        missing = not record or not record.get("api_key") or not record.get("access_token")
+        if missing:
+            _set_working(False, _login_note())
+        else:
+            _GEN[mode] = bump_generation()
+            if not _other_working(mode):
+                clear_activity()
+            _SEEN = set()
+            _SCREENED = set()
+            _REVIEW_QUEUED = set()
+            _REVIEWS = {}
+            _PASSED = {}
+            _LAST_COUNT = -1
+            _FINISHED = False
+            _BOOK = {"scanned": 0, "accepted": 0, "setups": [], "sell_calls": [], "vetoes": []}
+            _RUNNING = False
+    if missing:
+        return public_snapshot()
+    # Leave saved prices in place while the other read is still using them.
+    if not _other_working(mode):
+        try:
+            from kite_app.scan_jobs import forget_saved_scans
 
-        forget_saved_scans()
-    except Exception:
-        logger.info("saved scan coverage was not cleared")
+            forget_saved_scans()
+        except Exception:
+            logger.info("saved scan coverage was not cleared")
     resume_scan()
     labels = ", ".join(chosen)
     _set_working(True, f"Starting again from the first NSE share ({labels}).")
     snapshot = public_snapshot()
-    threading.Thread(target=_begin_again, args=(record,), daemon=True).start()
+    threading.Thread(
+        target=_begin_again,
+        args=(record, mode, list(chosen), int(_GEN[mode])),
+        daemon=True,
+    ).start()
     return snapshot
 
 
-def _begin_again(record: dict) -> None:
+def _begin_again(record: dict, mode: Optional[str] = None, caps: Optional[list] = None, generation: Optional[int] = None) -> None:
     """Start the read after coverage was cleared on the request thread."""
+    if mode in _MODES:
+        _CAPS_LOCAL.mode = mode
+    if caps:
+        _CAPS_LOCAL.caps = list(caps)
+    if generation is not None:
+        _CAPS_LOCAL.generation = int(generation)
     try:
+        with _LOCK:
+            if mode in _MODES:
+                _switch_to_locked(mode)
         _launch(record)
     except Exception:
         logger.info("scan was not started")
+    finally:
+        _clear_enqueue()
 
 
 def _adopt_mode(body: dict) -> None:
@@ -140,32 +357,23 @@ def _adopt_mode(body: dict) -> None:
 
 
 def _message_is_current(body: dict) -> bool:
-    """Drop older-generation work. Same-generation messages carry the desk caps.
+    """Drop older-generation work for this read. The other read keeps its own generation.
 
     SQS workers may not have seen the HTTP Start-from-zero yet. When the
     generation matches, adopt the caps stamped on the message so a large-only
     restart cannot keep screening mid/small on a stale worker.
     """
-    from kite_app.desk_progress import current_generation
-    from kite_app.scanner_data import normalize_cap_segments, selected_cap_segments, set_cap_segments
+    from kite_app.scanner_data import selected_cap_segments, set_cap_segments
 
-    raw = body.get("generation")
-    if raw is None:
-        # Legacy messages without a generation stamp are ignored after a restart
-        # so they cannot rewrite the desk's large/mid/small selection.
-        return current_generation() == 0
-    try:
-        if int(raw) != current_generation():
-            return False
-    except (TypeError, ValueError):
+    mode = _scan_mode(body)
+    if not _generation_matches(mode, body.get("generation")):
         return False
-    message_caps = normalize_cap_segments(
-        body.get("caps") if isinstance(body.get("caps"), list) else None,
-        require=True,
-    )
+    message_caps = _message_cap_list(body)
     if not message_caps:
         return False
-    if set(message_caps) != set(selected_cap_segments()):
+    _CAPS[mode] = list(message_caps)
+    # A second live read must not have its universe rewritten by this message.
+    if not _other_working(mode) and set(message_caps) != set(selected_cap_segments()):
         set_cap_segments(message_caps)
     _adopt_mode(body)
     return True
@@ -177,6 +385,18 @@ def continue_scan(record: Optional[dict]) -> dict:
 
 
 def public_snapshot() -> dict:
+    """Both reads. A poll that arrives during a model call still sees the last lines."""
+    owns = _LOCK.acquire(blocking=False)
+    try:
+        if not owns and _LAST_SNAPSHOT:
+            return copy.deepcopy(_LAST_SNAPSHOT)
+        return _build_public_snapshot()
+    finally:
+        if owns:
+            _LOCK.release()
+
+
+def _build_public_snapshot() -> dict:
     from kite_app.scanner_data import selected_cap_segments
 
     with _LOCK:
@@ -191,7 +411,7 @@ def public_snapshot() -> dict:
                 for item in sorted(_PASSED.values(), key=lambda row: str(row.get("symbol") or ""))
             ],
             "working": _WORKING and not _FINISHED,
-            "paused": _paused(),
+            "paused": current_scan_mode() in _PAUSED_MODES or _paused(),
             "finished": _FINISHED,
             "caps": selected_cap_segments(),
             "mode": current_scan_mode(),
@@ -204,7 +424,7 @@ def public_snapshot() -> dict:
         book["activity"] = [{"text": note, "state": "done"}]
         book["progress"] = None
         book["universe_note"] = note
-        return book
+        return _with_runs(book)
     lines = _progress_lines()
     if focus and focus not in lines and "% remaining." not in focus and not _scan_chatter(focus):
         lines.append(focus)
@@ -221,6 +441,64 @@ def public_snapshot() -> dict:
     book["activity"] = activity
     book["progress"] = progress
     book["universe_note"] = activity[-1]["text"] if activity else ""
+    return _with_runs(book)
+
+
+def _saved_run(mode: str) -> dict:
+    snap = _SAVED.get(mode)
+    paused = mode in _PAUSED_MODES
+    if not snap:
+        return {
+            "scanned": 0,
+            "accepted": 0,
+            "setups": [],
+            "sell_calls": [],
+            "vetoes": [],
+            "passed": [],
+            "working": False,
+            "paused": paused,
+            "finished": False,
+            "caps": list(_CAPS.get(mode) or []),
+            "mode": mode,
+            "activity": [],
+            "progress": None,
+            "universe_note": "",
+        }
+    working = bool(snap.get("working")) and not snap.get("finished") and not paused
+    focus = str(snap.get("focus") or "")
+    book = snap.get("book") or {}
+    passed = snap.get("passed") or {}
+    return {
+        "scanned": int(book.get("scanned") or 0),
+        "accepted": int(book.get("accepted") or 0),
+        "setups": copy.deepcopy(book.get("setups") or []),
+        "sell_calls": copy.deepcopy(book.get("sell_calls") or []),
+        "vetoes": copy.deepcopy(book.get("vetoes") or []),
+        "passed": [
+            dict(item)
+            for item in sorted(passed.values(), key=lambda row: str(row.get("symbol") or ""))
+        ],
+        "working": working,
+        "paused": paused,
+        "finished": bool(snap.get("finished")),
+        "caps": list(_CAPS.get(mode) or []),
+        "mode": mode,
+        "progress": None if snap.get("finished") else snap.get("progress"),
+        "universe_note": focus,
+        "activity": [{"text": focus, "state": "active" if working else "done"}] if focus else [],
+    }
+
+
+def _with_runs(book: dict) -> dict:
+    """Attach both reads. The top-level fields stay the read this worker is on."""
+    global _LAST_SNAPSHOT
+    mode = book.get("mode") if book.get("mode") in _MODES else current_scan_mode()
+    other = _other_mode(mode)
+    book["runs"] = {
+        mode: {key: book[key] for key in book if key != "runs"},
+        other: _saved_run(other),
+    }
+    _LAST_SNAPSHOT = book
     return book
 
 
@@ -262,7 +540,7 @@ def _review_rows(rows: list[dict]) -> None:
             item.update(saved)
             continue
         symbol = str(item.get("symbol") or "")
-        _set_focus(f"Grok is scoring the 30-point framework for {symbol}.")
+        _set_focus(f"Grok is searching Screener and scoring the 30-point framework for {symbol}.")
         review_setups([item])
         if _model_still_waiting(item):
             continue
@@ -276,14 +554,14 @@ def _review_rows(rows: list[dict]) -> None:
 def _load_stocks() -> list[dict]:
     from kite_app.algo_layers import combine_books
     from kite_app.scan_jobs import latest_crossover_signals
-    from kite_app.scanner_data import listed_cap_symbols, selected_cap_segments
+    from kite_app.scanner_data import listed_cap_symbols
     from kite_app.signals_cache import history_by_ticker
 
     signals = latest_crossover_signals()
     remembered = history_by_ticker([signal["symbol"] for signal in signals]) if signals else []
     stocks = combine_books([], signals, remembered)
     try:
-        allowed = {symbol.upper() for symbol in listed_cap_symbols(selected_cap_segments())}
+        allowed = {symbol.upper() for symbol in listed_cap_symbols(_active_caps())}
     except Exception:
         logger.info("selected cap lists were not loaded; screening waits for the chosen universe")
         return []
@@ -308,9 +586,9 @@ def _screen_total(saved_count: int = 0) -> int:
     if not pending:
         return max(baseline, 1) if baseline else 0
     try:
-        from kite_app.scanner_data import listed_cap_symbols, selected_cap_segments
+        from kite_app.scanner_data import listed_cap_symbols
 
-        return max(baseline, len(listed_cap_symbols(selected_cap_segments())))
+        return max(baseline, len(listed_cap_symbols(_active_caps())))
     except Exception:
         return baseline
 
@@ -338,7 +616,7 @@ def _progress_lines() -> list[str]:
         "commodity_future": "Commodity futures",
     }
     for mode, row in scan_status().items():
-        if mode == "screen":
+        if mode == "screen" or str(mode).startswith("screen:"):
             continue
         total = int(row.get("total") or 0)
         if row.get("running") and total:
@@ -405,12 +683,16 @@ def _scan_progress() -> Optional[dict]:
             "action": str(row.get("action") or "scanned"),
             "remaining_percent": _remaining_percent(done, total),
         }
+        screen_key = f"screen:{current_scan_mode()}"
+        is_screen = mode == "screen" or mode == screen_key or str(mode).startswith("screen:")
+        if is_screen and mode != screen_key and screen_key in scan_status():
+            continue
         chosen = payload
-        if mode == "screen":
+        if is_screen:
             finished_screen = payload
         if not row.get("running"):
             continue
-        if mode == "screen":
+        if is_screen:
             running_screen = payload
         elif running_book is None:
             running_book = payload
@@ -452,25 +734,41 @@ def _launch(record: dict) -> None:
             _FOCUS = _read_note()
         focus = _FOCUS
     _note_activity_line(focus)
-    threading.Thread(target=_loop, daemon=True).start()
+    threading.Thread(
+        target=_loop,
+        kwargs={
+            "mode": getattr(_CAPS_LOCAL, "mode", None),
+            "caps": list(getattr(_CAPS_LOCAL, "caps", None) or []),
+            "generation": getattr(_CAPS_LOCAL, "generation", None),
+        },
+        daemon=True,
+    ).start()
 
 
 def handle_message(body: dict) -> None:
-    """Run one queued batch. The caller deletes the message only after this returns."""
-    if _paused():
-        return
-    if not _message_is_current(body):
-        # Stale large/mid/small work must not mutate the current desk selection.
-        return
-    kind = str(body.get("kind") or "")
-    if kind == "equity_pass":
-        _handle_pass(body)
-        return
-    if kind == "screen":
-        _handle_screen(body)
-        return
-    if kind == "review":
-        _handle_review(body)
+    """Run one queued batch for its own read. The other read stays parked."""
+    mode = _scan_mode(body)
+    _LOCK.acquire()
+    try:
+        _switch_to_locked(mode)
+        if mode in _PAUSED_MODES:
+            return
+        if _paused() and not _other_working(mode):
+            return
+        if not _message_is_current(body):
+            # Stale large/mid/small work must not mutate this read's selection.
+            return
+        _bind_enqueue(mode, body)
+        kind = str(body.get("kind") or "")
+        if kind == "equity_pass":
+            _handle_pass(body)
+        elif kind == "screen":
+            _handle_screen(body)
+        elif kind == "review":
+            _handle_review(body)
+    finally:
+        _clear_enqueue()
+        _LOCK.release()
 
 
 def _handle_pass(body: dict) -> None:
@@ -483,7 +781,7 @@ def _handle_pass(body: dict) -> None:
         _set_working(False, _login_note())
         return
     if wave > _PASS_LIMIT:
-        _set_working(False, "The equity read is still going. Open Final list again to continue.")
+        _set_working(False, "The equity read is still going. Open TechnicalScan again to continue.")
         return
     from kite_app.scan_jobs import ensure_listed_equity_scan, equity_work_pending
 
@@ -591,7 +889,7 @@ def _handle_screen(body: dict) -> None:
     from kite_app.scanner_data import filter_symbols_to_caps
 
     raw_symbols = [str(symbol).upper() for symbol in body.get("symbols") or [] if str(symbol).strip()]
-    symbols = filter_symbols_to_caps(raw_symbols)
+    symbols = filter_symbols_to_caps(raw_symbols, _active_caps())
     if not symbols:
         # Cap filter dropped the batch; still clear the queued SEEN entries so finish can run.
         _mark_screened(raw_symbols)
@@ -615,7 +913,7 @@ def _handle_screen(body: dict) -> None:
         symbol = str(item.get("symbol") or "")
         if symbol and _review_key(item) not in _REVIEWS and symbol not in _REVIEW_QUEUED:
             review_symbols.append(symbol)
-    review_symbols = filter_symbols_to_caps(review_symbols)
+    review_symbols = filter_symbols_to_caps(review_symbols, _active_caps())
     if review_symbols and user:
         from kite_app.equity_queue import enqueue_reviews
 
@@ -639,7 +937,7 @@ def _handle_review(body: dict) -> None:
     from kite_app.scanner_data import filter_symbols_to_caps
 
     symbol = str(body.get("symbol") or "").upper()
-    if not symbol or filter_symbols_to_caps([symbol]) != [symbol]:
+    if not symbol or filter_symbols_to_caps([symbol], _active_caps()) != [symbol]:
         _REVIEW_QUEUED.discard(symbol)
         _finish_if_idle()
         return
@@ -660,7 +958,6 @@ def _handle_review(body: dict) -> None:
         _REVIEW_QUEUED.discard(symbol)
         _finish_if_idle()
         return
-    _set_focus(f"Grok is scoring the 30-point framework for {symbol}.")
     _review_rows(rows)
     if any(_model_still_waiting(item) for item in rows):
         if _requeue_model(body, symbol):
@@ -724,7 +1021,7 @@ def _requeue_model(body: dict, symbol: str) -> bool:
             row["status"] = "waiting"
     _set_working(
         True,
-        f"Grok is still scoring the 30-point framework for {symbol}. "
+        f"Grok is still searching Screener and scoring the 30-point framework for {symbol}. "
         f"The read stays open until every passed name is scored ({attempt} of {_MODEL_RETRY_LIMIT}).",
     )
     return True
@@ -772,12 +1069,14 @@ def _note_screen_progress(done: int, total: Optional[int] = None) -> None:
     from kite_app.desk_progress import note_scan, scan_status
 
     if total is None:
-        total = int((scan_status().get("screen") or {}).get("total") or 0)
+        status = scan_status()
+        row = status.get(f"screen:{current_scan_mode()}") or status.get("screen") or {}
+        total = int(row.get("total") or 0)
     total = max(int(total), int(done))
     if total <= 0:
         return
     note_scan(
-        "screen",
+        f"screen:{current_scan_mode()}",
         done,
         total,
         0,
@@ -785,6 +1084,16 @@ def _note_screen_progress(done: int, total: Optional[int] = None) -> None:
         label="names",
         action="screened",
     )
+    if not _other_working(current_scan_mode()):
+        note_scan(
+            "screen",
+            done,
+            total,
+            0,
+            done < total,
+            label="names",
+            action="screened",
+        )
 
 
 def _mark_seen(symbols: list[str]) -> None:
@@ -914,24 +1223,31 @@ def _mark_finished(focus: str) -> None:
             return
         _FINISHED = True
         screened = len(_SCREENED)
+        mode_name = current_scan_mode()
+        other_live = _other_working(mode_name)
     # Drop leftover "% remaining" lines so the desk only shows the outcome.
-    clear_activity()
+    # Leave the other read's meter alone while it is still running.
+    if not other_live:
+        clear_activity()
     # Snap the screen meter to 100% so a finished read never sits at "12% remaining".
     if screened > 0:
-        note_scan("screen", screened, screened, 0, False, label="names", action="screened")
+        note_scan(f"screen:{mode_name}", screened, screened, 0, False, label="names", action="screened")
+        if not other_live:
+            note_scan("screen", screened, screened, 0, False, label="names", action="screened")
     # Stop leftover price-scan meters so the desk does not show "5 of 495" after a finished large-cap read.
-    for mode, row in scan_status().items():
-        if mode == "screen" or not row.get("running"):
-            continue
-        note_scan(
-            mode,
-            int(row.get("done") or 0),
-            int(row.get("total") or 0),
-            int(row.get("signals") or 0),
-            False,
-            label=str(row.get("label") or ""),
-            action=str(row.get("action") or ""),
-        )
+    if not other_live:
+        for mode, row in scan_status().items():
+            if mode == "screen" or str(mode).startswith("screen:") or not row.get("running"):
+                continue
+            note_scan(
+                mode,
+                int(row.get("done") or 0),
+                int(row.get("total") or 0),
+                int(row.get("signals") or 0),
+                False,
+                label=str(row.get("label") or ""),
+                action=str(row.get("action") or ""),
+            )
     _set_working(False, focus)
 
 
@@ -974,7 +1290,7 @@ async def serve_queue(stop) -> None:
     from kite_app.equity_queue import delete_batch, extend_visibility, receive_batch
 
     while not stop.is_set():
-        if _paused():
+        if _queue_should_wait():
             try:
                 await asyncio.wait_for(stop.wait(), timeout=15)
             except asyncio.TimeoutError:
@@ -1007,19 +1323,29 @@ async def serve_queue(stop) -> None:
                 logger.info("equity message was not finished")
 
 
-def _loop() -> None:
+def _loop(mode: Optional[str] = None, caps: Optional[list] = None, generation: Optional[int] = None) -> None:
     global _RUNNING
-    from kite_app.desk_progress import current_generation
-
+    mode = mode if mode in _MODES else current_scan_mode()
+    if caps:
+        _CAPS_LOCAL.caps = list(caps)
+    _CAPS_LOCAL.mode = mode
+    if generation is not None:
+        _CAPS_LOCAL.generation = int(generation)
+    token = _GEN.get(mode)
     started = time.monotonic()
-    generation = current_generation()
     try:
         while time.monotonic() - started < 45 * 60:
-            if _paused():
+            if mode in _PAUSED_MODES or (_paused() and not _other_working(mode)):
+                with _LOCK:
+                    if _MODE != mode:
+                        _switch_to_locked(mode)
                 _set_working(False, _STOP_NOTE)
                 return
-            if current_generation() != generation:
+            if _GEN.get(mode) != token:
                 return
+            with _LOCK:
+                if _MODE != mode:
+                    _switch_to_locked(mode)
             record = _current_record()
             try:
                 from kite_app.scan_jobs import ensure_listed_equity_scan, equity_work_pending
@@ -1043,10 +1369,13 @@ def _loop() -> None:
                     if _FINISHED:
                         return
             time.sleep(5)
-        _set_working(False, "The equity read is still going. Open Final list again to continue.")
+        _set_working(False, "The equity read is still going. Open TechnicalScan again to continue.")
     finally:
         with _LOCK:
-            _RUNNING = False
+            if _MODE == mode:
+                _RUNNING = False
+            elif mode in _SAVED:
+                _SAVED[mode]["running"] = False
 
 
 def _current_record() -> Optional[dict]:
@@ -1069,6 +1398,7 @@ def _set_working(working: bool, focus: str) -> None:
         _WORKING = working and not _FINISHED
         _FOCUS = focus
     _note_activity_line(focus)
+    _touch_snapshot()
 
 
 def _set_focus(focus: str) -> None:
@@ -1078,6 +1408,21 @@ def _set_focus(focus: str) -> None:
     if _FINISHED and "% remaining." in focus:
         return
     _note_activity_line(focus)
+    _touch_snapshot()
+
+
+def _touch_snapshot() -> None:
+    """Keep a copy a poll can read while this read holds the worker."""
+    global _LAST_SNAPSHOT, _TOUCHING
+    if _TOUCHING:
+        return
+    _TOUCHING = True
+    try:
+        _LAST_SNAPSHOT = _build_public_snapshot()
+    except Exception:
+        logger.info("scan snapshot was not stored")
+    finally:
+        _TOUCHING = False
 
 
 def _note_activity_line(focus: str) -> None:

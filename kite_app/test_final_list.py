@@ -495,6 +495,49 @@ def test_wealth30_sends_every_name_to_the_30_points(monkeypatch):
         set_cap_segments(["large", "mid", "small"])
 
 
+def test_wealth30_review_uses_the_screener_score(monkeypatch):
+    from kite_app.desk_progress import current_generation
+    from kite_app.scanner_data import set_cap_segments
+
+    set_cap_segments(["large"])
+    final_list._MODE = "wealth30"
+    final_list._FINISHED = False
+    final_list._REVIEW_QUEUED = {"RELIANCE"}
+    final_list._REVIEWS = {}
+    final_list._PASSED = {"RELIANCE": {"symbol": "RELIANCE", "status": "waiting"}}
+    final_list._BOOK = {"scanned": 1, "accepted": 1, "setups": [], "sell_calls": [], "vetoes": []}
+    monkeypatch.setattr("kite_app.scanner_data.filter_symbols_to_caps", lambda symbols, segments=None: list(symbols))
+    monkeypatch.setattr(final_list, "_load_stocks", lambda: [{"symbol": "RELIANCE", "company_name": "Reliance", "candles": []}])
+    called = []
+
+    def fake_review(rows, ask=None):
+        called.append(rows[0]["symbol"])
+        rows[0]["ai_decision"] = "stand_aside"
+        rows[0]["ai_reason"] = "Promoter holding is 1.95% on the Screener page."
+        rows[0]["gtt_tradable"] = False
+
+    monkeypatch.setattr("kite_app.algo_review.review_setups", fake_review)
+    monkeypatch.setattr("kite_app.scan_jobs.equity_work_pending", lambda: True)
+    try:
+        final_list.handle_message({
+            "kind": "review",
+            "platform_user_id": "user",
+            "symbol": "RELIANCE",
+            "caps": ["large"],
+            "generation": current_generation(),
+            "mode": "wealth30",
+            "attempt": 0,
+        })
+        assert called == ["RELIANCE"]
+        assert "Screener" in final_list._PASSED["RELIANCE"]["reason"]
+    finally:
+        final_list._MODE = "screens"
+        final_list._PASSED = {}
+        final_list._REVIEW_QUEUED = set()
+        final_list._REVIEWS = {}
+        set_cap_segments(["large", "mid", "small"])
+
+
 def test_finished_note_keeps_each_models_reason():
     from kite_app.scanner_data import set_cap_segments
 
@@ -693,3 +736,78 @@ def test_stop_holds_the_scan_until_continue(monkeypatch):
         assert "secret-token" not in str(resumed)
     finally:
         resume_scan()
+
+
+def test_technical_scan_start_leaves_paul_scan_running(monkeypatch):
+    from kite_app.desk_progress import current_generation, resume_scan, scan_paused
+    from kite_app.scanner_data import set_cap_segments
+
+    resume_scan()
+    set_cap_segments(["mid"])
+    final_list._MODE = "wealth30"
+    final_list._WORKING = True
+    final_list._FINISHED = False
+    final_list._FOCUS = "Scoring the 30-point framework for the selected caps."
+    final_list._PASSED = {"MSUMI": {"symbol": "MSUMI", "status": "waiting", "reason": ""}}
+    final_list._BOOK = {"scanned": 1, "accepted": 1, "setups": [], "sell_calls": [], "vetoes": []}
+    final_list._SEEN = {"MSUMI"}
+    final_list._SCREENED = set()
+    final_list._REVIEW_QUEUED = {"MSUMI"}
+    final_list._REVIEWS = {}
+    paul_generation = current_generation()
+    final_list._GEN["wealth30"] = paul_generation
+    seen = []
+    monkeypatch.setattr(final_list, "_handle_screen", lambda body: seen.append(body.get("mode")))
+    monkeypatch.setattr(final_list, "_launch", lambda record: None)
+
+    class _Noop:
+        def start(self):
+            return None
+
+    monkeypatch.setattr(final_list.threading, "Thread", lambda *args, **kwargs: _Noop())
+    monkeypatch.setattr("kite_app.scan_jobs.forget_saved_scans", lambda: None)
+    try:
+        snap = final_list.start_from_zero(
+            {"api_key": "k", "access_token": "t", "platform_user_id": "u"},
+            caps=["large"],
+            mode="screens",
+        )
+        assert snap["mode"] == "screens"
+        assert snap["working"] is True
+        assert snap["runs"]["wealth30"]["working"] is True
+        assert snap["runs"]["wealth30"]["passed"][0]["symbol"] == "MSUMI"
+        assert snap["runs"]["screens"]["working"] is True
+
+        final_list.handle_message({
+            "kind": "screen",
+            "symbols": ["MSUMI"],
+            "caps": ["mid"],
+            "generation": paul_generation,
+            "mode": "wealth30",
+        })
+        assert seen == ["wealth30"]
+
+        stopped = final_list.stop_scan("screens")
+        assert stopped["runs"]["screens"]["working"] is False
+        assert stopped["runs"]["wealth30"]["working"] is True
+        assert scan_paused() is False
+    finally:
+        final_list._MODE = "screens"
+        final_list._WORKING = False
+        final_list._FINISHED = False
+        final_list._FOCUS = ""
+        final_list._PASSED = {}
+        final_list._BOOK = {"scanned": 0, "accepted": 0, "setups": [], "sell_calls": [], "vetoes": []}
+        final_list._SEEN = set()
+        final_list._SCREENED = set()
+        final_list._REVIEW_QUEUED = set()
+        final_list._REVIEWS = {}
+        final_list._SAVED.clear()
+        final_list._GEN["screens"] = None
+        final_list._GEN["wealth30"] = None
+        final_list._CAPS["screens"] = []
+        final_list._CAPS["wealth30"] = []
+        final_list._PAUSED_MODES.clear()
+        final_list._LAST_SNAPSHOT = {}
+        resume_scan()
+        set_cap_segments(["large", "mid", "small"])
