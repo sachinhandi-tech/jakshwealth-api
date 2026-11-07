@@ -79,6 +79,7 @@ def select_setups(stocks: list[dict], limit: int = TOP_CANDIDATES, review: bool 
         "scanned": len(stocks),
         "accepted": len(accepted),
         "setups": chosen,
+        "passed": accepted,
         "sell_calls": sell_calls,
         "rejected": rejected,
     }

@@ -23,6 +23,7 @@ _RECORD: Optional[dict] = None
 _SEEN: set[str] = set()
 _SCREENED: set[str] = set()
 _REVIEW_QUEUED: set[str] = set()
+_PASSED: dict[str, dict] = {}
 _STAMP = ("ai_decision", "ai_checks", "ai_reason", "gtt_tradable", "reason")
 _PASS_LIMIT = 80
 _SLICE = 250
@@ -71,7 +72,7 @@ def stop_scan() -> dict:
 
 def start_from_zero(record: Optional[dict], caps: Optional[list[str]] = None) -> dict:
     """Drop this read's progress and start again at the first NSE share."""
-    global _FINISHED, _LAST_COUNT, _RUNNING, _SEEN, _SCREENED, _REVIEW_QUEUED, _REVIEWS
+    global _FINISHED, _LAST_COUNT, _RUNNING, _SEEN, _SCREENED, _REVIEW_QUEUED, _REVIEWS, _PASSED
     from kite_app.desk_progress import bump_generation, clear_activity, resume_scan
     from kite_app.scanner_data import selected_cap_segments, set_cap_segments
 
@@ -91,6 +92,7 @@ def start_from_zero(record: Optional[dict], caps: Optional[list[str]] = None) ->
         _SCREENED = set()
         _REVIEW_QUEUED = set()
         _REVIEWS = {}
+        _PASSED = {}
         _LAST_COUNT = -1
         _FINISHED = False
         _BOOK["scanned"] = 0
@@ -168,6 +170,10 @@ def public_snapshot() -> dict:
             "setups": [dict(item) for item in _BOOK["setups"]],
             "sell_calls": [dict(item) for item in _BOOK["sell_calls"]],
             "vetoes": [dict(item) for item in _BOOK.get("vetoes") or []],
+            "passed": [
+                dict(item)
+                for item in sorted(_PASSED.values(), key=lambda row: str(row.get("symbol") or ""))
+            ],
             "working": _WORKING and not _FINISHED,
             "paused": _paused(),
             "finished": _FINISHED,
@@ -512,9 +518,13 @@ def _handle_screen(body: dict) -> None:
     from kite_app.algo_layers import select_setups
 
     book = select_setups(stocks, review=False)
+    passed = book.get("passed")
+    if not isinstance(passed, list):
+        passed = [*book["setups"], *book["sell_calls"]]
+    _note_passed(passed)
     user = str(body.get("platform_user_id") or "")
     review_symbols = []
-    for item in [*book["setups"], *book["sell_calls"]]:
+    for item in passed:
         symbol = str(item.get("symbol") or "")
         if symbol and _review_key(item) not in _REVIEWS and symbol not in _REVIEW_QUEUED:
             review_symbols.append(symbol)
@@ -563,6 +573,7 @@ def _handle_review(body: dict) -> None:
     _set_focus(f"Reading filings, news, and lawsuits for {symbol}.")
     _review_rows(rows)
     _remember_setups(rows)
+    _mark_passed_status(rows)
     _REVIEW_QUEUED.discard(symbol)
     buys = [str(item.get("symbol") or "") for item in rows if item.get("ai_decision") == "buy"]
     if buys:
@@ -592,6 +603,34 @@ def _saved_symbols() -> list[str]:
 def _next_symbols(saved: Optional[list[str]] = None) -> list[str]:
     rows = _saved_symbols() if saved is None else saved
     return [symbol for symbol in rows if symbol not in _SEEN][:_SLICE]
+
+
+def _note_passed(rows: list[dict]) -> None:
+    """Remember every name that cleared the screens, before the model reads it."""
+    global _PASSED
+    with _LOCK:
+        for item in rows:
+            symbol = str(item.get("symbol") or "").upper()
+            if not symbol or symbol in _PASSED:
+                continue
+            _PASSED[symbol] = {
+                "symbol": symbol,
+                "company_name": str(item.get("company_name") or ""),
+                "last_close": item.get("last_close"),
+                "status": "waiting",
+            }
+
+
+def _mark_passed_status(rows: list[dict]) -> None:
+    with _LOCK:
+        for item in rows:
+            symbol = str(item.get("symbol") or "").upper()
+            row = _PASSED.get(symbol)
+            if not row:
+                continue
+            decision = str(item.get("ai_decision") or "").strip()
+            if decision:
+                row["status"] = decision
 
 
 def _mark_screened(symbols: list[str]) -> int:

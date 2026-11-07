@@ -351,6 +351,53 @@ def test_screen_handler_drops_symbols_outside_selected_caps(monkeypatch):
         set_cap_segments(["large", "mid", "small"])
 
 
+def test_passed_names_are_listed_before_the_model_runs(monkeypatch):
+    from kite_app.scanner_data import set_cap_segments
+
+    set_cap_segments(["large"])
+    queued = []
+    monkeypatch.setattr(final_list, "_FINISHED", False)
+    monkeypatch.setattr(final_list, "_SEEN", set())
+    monkeypatch.setattr(final_list, "_SCREENED", set())
+    monkeypatch.setattr(final_list, "_REVIEW_QUEUED", set())
+    monkeypatch.setattr(final_list, "_REVIEWS", {})
+    monkeypatch.setattr(final_list, "_PASSED", {})
+    monkeypatch.setattr(final_list, "_BOOK", {"scanned": 0, "accepted": 0, "setups": [], "sell_calls": [], "vetoes": []})
+    monkeypatch.setattr("kite_app.scanner_data.listed_cap_symbols", lambda segments=None: {"KARURVYSYA"})
+    monkeypatch.setattr("kite_app.scanner_data.filter_symbols_to_caps", lambda symbols, segments=None: [s for s in symbols if s == "KARURVYSYA"])
+    monkeypatch.setattr(final_list, "_load_stocks", lambda: [{"symbol": "KARURVYSYA"}])
+    monkeypatch.setattr(
+        "kite_app.algo_layers.select_setups",
+        lambda stocks, review=False: {
+            "scanned": 1,
+            "accepted": 1,
+            "setups": [{"symbol": "KARURVYSYA", "company_name": "Karur Vysya", "last_close": 210}],
+            "passed": [{"symbol": "KARURVYSYA", "company_name": "Karur Vysya", "last_close": 210}],
+            "sell_calls": [],
+        },
+    )
+    monkeypatch.setattr("kite_app.equity_queue.enqueue_reviews", lambda user, symbols: queued.append(list(symbols)) or len(symbols))
+    monkeypatch.setattr("kite_app.scan_jobs.equity_work_pending", lambda: True)
+    try:
+        final_list._handle_screen({
+            "symbols": ["KARURVYSYA"],
+            "platform_user_id": "user",
+            "caps": ["large"],
+            "generation": 0,
+        })
+        snap = final_list.public_snapshot()
+        assert queued == [["KARURVYSYA"]]
+        assert snap["passed"] == [{
+            "symbol": "KARURVYSYA",
+            "company_name": "Karur Vysya",
+            "last_close": 210,
+            "status": "waiting",
+        }]
+    finally:
+        final_list._PASSED = {}
+        set_cap_segments(["large", "mid", "small"])
+
+
 def test_finished_read_is_not_relaunched_on_poll(monkeypatch):
     launched = []
     monkeypatch.setattr(final_list, "_FINISHED", True)
